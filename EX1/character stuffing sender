@@ -1,0 +1,459 @@
+--------- character stuffing-------------
+#include <stdio.h>
+#include <string.h>
+#define Max_URL 50
+#define Max_IP 16
+#define Max_MAC 18
+#define Hash_Size 10
+#define File_Size 1000
+#define Max_Choice 15
+struct HashEntry {
+    char url[Max_URL];
+    char ip[Max_IP];
+    char mac[Max_MAC];
+    int port;
+    int is_occupied;
+};
+struct HashEntry hashTable[Hash_Size];
+unsigned int randomSeed = 5321;
+char fileData[File_Size];
+char outname[File_Size];
+int dataLength = 0; 
+int srcIdx = -1;
+int destIdx = -1;
+int getHashIndex(char url[Max_URL]) {
+    int sum = 0, i;
+    for (i = 0; url[i] != '\0'; i++) sum += url[i];
+    return sum % Hash_Size;
+}
+int getRandomPort() {
+	randomSeed = (randomSeed * 1103515245 + 12345) & 0x7fffffff;
+    return 1024 + (randomSeed % (49151 - 1024 + 1));
+}
+void insertNode(char url[Max_URL], char ip[Max_IP], char mac[Max_MAC], int port) {
+    int index = getHashIndex(url), or_index = index;
+    while (hashTable[index].is_occupied == 1) {
+        if (strcmp(hashTable[index].url, url) == 0) {
+            strcpy(hashTable[index].ip, ip);
+            strcpy(hashTable[index].mac, mac);
+            hashTable[index].port = port;
+            return;
+        }
+        index = (index + 1) % Hash_Size;
+        if (index == or_index) return;
+    }
+    strcpy(hashTable[index].url, url);
+    strcpy(hashTable[index].ip, ip);
+    strcpy(hashTable[index].mac, mac);
+    hashTable[index].port = port;
+    hashTable[index].is_occupied = 1;
+}
+int searchTable(char url[Max_URL]) {
+    int index = getHashIndex(url), or_index = index;
+    while (hashTable[index].is_occupied != 0) {
+        if (strcmp(hashTable[index].url, url) == 0) return index;
+        index = (index + 1) % Hash_Size;
+        if (index == or_index) break;
+    }
+    return -1;
+}
+void printTable() {
+    int i;
+    printf("\n=================== CURRENT HASH TABLE ===================\n");
+    printf("%-6s | %-18s | %-15s | %-17s | %-6s\n", "Index", "URL Link", "IP Address", "MAC Address", "Port");
+    printf("----------------------------------------------------------------------\n");
+    for (i = 0; i < Hash_Size; i++) {
+        if (hashTable[i].is_occupied)
+            printf("%-6d | %-18s | %-15s | %-17s | %-6d\n", i, hashTable[i].url, hashTable[i].ip, hashTable[i].mac, hashTable[i].port);
+        else
+            printf("%-6d | %-18s | %-15s | %-17s | %-6s\n", i, "Empty", "-", "-", "-");
+    }
+    printf("======================================================================\n");
+}
+void Char_binary(char ch) {
+    int i;
+    for (i = 7; i >= 0; i--)
+		 printf("%d", (ch >> i) & 1);
+}
+void String_binary(char *str) {
+    int i;
+    for (i = 0; str[i] != '\0'; i++) {
+        Char_binary(str[i]);
+        printf(" ");
+    }
+}
+void Ip_binary(char ip[Max_IP]) {
+    int v1, v2, v3, v4, p, i;
+    int pieces[4];
+    if (sscanf(ip, "%d.%d.%d.%d", &v1, &v2, &v3, &v4) != 4) 
+		return;
+    pieces[0] = v1;
+	pieces[1] = v2; 
+	pieces[2] = v3; 
+	pieces[3] = v4;
+    for (p = 0; p < 4; p++) {
+        for (i = 7; i >= 0; i--) 
+			printf("%d", (pieces[p] >> i) & 1);
+        printf(" ");
+    }
+}
+void Mac_binary(char mac[Max_MAC]) {
+    unsigned int m1, m2, m3, m4;
+    int p, i;
+    unsigned int pieces[4];
+    if (sscanf(mac, "%x:%x:%x:%x", &m1, &m2, &m3, &m4) != 4) 
+		return;
+    pieces[0] = m1; 
+	pieces[1] = m2; 
+	pieces[2] = m3; 
+	pieces[3] = m4; 
+    for (p = 0; p < 4; p++) {
+        for (i = 7; i >= 0; i--) 
+			printf("%d", (pieces[p] >> i) & 1);
+        printf(" ");
+    }
+}
+void Port_binary(int port) {
+    int i;
+    for (i = 15; i >= 0; i--) {
+        printf("%d", (port >> i) & 1);
+        if (i == 8)
+			printf(" ");
+    }
+    printf(" ");
+}
+void Network_table(char choice[], char url[Max_URL], char ip[Max_IP], char mac[Max_MAC]) {
+    int count = 1, idx, portnumber;
+    while (1) {
+        printTable();
+        printf("\nModify table? (insert/delete/no): ");
+        scanf("%s", choice);
+        if (strcmp(choice, "insert") == 0) {
+            printf("Enter URL: ");
+            scanf("%s", url);
+            printf("Enter IP Address: ");
+            scanf("%s", ip);
+            printf("Enter Mac Address: ");
+            scanf("%s", mac);
+            portnumber = getRandomPort();
+            insertNode(url, ip, mac, portnumber);
+            printf("Inserted node successfully. Port: %d\n", portnumber);
+        }
+        else if (strcmp(choice, "delete") == 0) {
+            printf("Enter URL to delete: ");
+            scanf("%s", url);
+            idx = searchTable(url);
+            if (idx != -1) {
+                hashTable[idx].is_occupied = 0;
+                printf("Deleted entry node for: %s\n", url);
+            } else {
+                printf("Error: URL '%s' not found!\n", url);
+            }
+        }
+        else if (strcmp(choice, "no") == 0) 
+			break;
+        else 
+			printf("Error: Invalid menu choice.\n");
+    }
+}
+void Tcp_network_layer(char srcUrl[], char destUrl[]) {
+    while (1) {
+        printf("\nEnter Source URL: ");
+        scanf("%s", srcUrl);
+        srcIdx = searchTable(srcUrl);
+        if (srcIdx != -1) 
+			break;
+        printf("Error: Source URL '%s' not found. Try again.\n", srcUrl);
+    }
+    while (1) {
+        printf("Enter Destination URL: ");
+        scanf("%s", destUrl);
+        destIdx = searchTable(destUrl);
+        if (destIdx != -1)
+			break;
+        printf("Error: Destination URL '%s' not found. Try again.\n", destUrl);
+    }
+}
+void Data_stuffing(char fileData[])
+{
+	char sample[]= " ";
+	char copy[File_Size];
+	strcpy(copy,fileData);
+    char *sub = strtok(copy,sample);
+    while(sub!=NULL)
+    {
+    	if(strcmp(sub,"DLE")==0 || strcmp(sub,"ETX")==0)
+    	{
+    		printf("DLE");
+    		printf(" ");
+    		printf("%s",sub);
+			printf(" ");
+		}
+		else
+		{
+			printf("%s",sub);
+			printf(" ");
+		}
+		sub = strtok(NULL,sample);
+	}
+}
+void Char_binary_file(FILE *dest, char ch) {
+    int i;
+    for (i = 7; i >= 0; i--) {
+        fprintf(dest, "%d", (ch >> i) & 1);
+    }
+}
+void String_binary_file(FILE *dest, char *str) {
+    int i;
+    for (i = 0; str[i] != '\0'; i++) {
+        Char_binary_file(dest, str[i]);
+        fprintf(dest, " ");
+    }
+}
+void Data_stuffing_binary(char fileData[])
+{
+	printf("\nEnter output filename: ");
+    scanf("%s", outname);
+  FILE *outputFile = fopen("outname", "w");
+    if (outputFile == NULL) 
+    {
+        printf("Error opening file for writing!\n");
+        return;
+    }
+	char copy[File_Size];
+	strcpy(copy,fileData);
+	char sample[]= " ";
+    char *sub = strtok(copy,sample);
+    while(sub!=NULL)
+    {
+    	if(strcmp(sub,"DLE")==0 )
+    	{
+    		String_binary("DLE");
+    		String_binary_file(outputFile,"DLE");
+    		printf(" ");
+    		String_binary_file(outputFile," ");
+    		String_binary(sub);
+			printf(" ");
+			String_binary_file(outputFile,sub);
+			String_binary_file(outputFile," ");
+		}
+		else
+		{
+			String_binary_file(outputFile,sub);
+			String_binary_file(outputFile," ");
+			String_binary(sub);
+			printf(" ");
+		}
+		sub = strtok(NULL,sample);
+	}
+	fclose(outputFile);
+}
+void Network_packets(char fileData[],int packet_size, int frame_size) {
+	  int packet_char = packet_size / 8;
+    if (packet_char <= 0) 
+		packet_char = 1;
+    int frame_char = frame_size / 8;
+    if (frame_char <= 0)
+		frame_char = 1;
+    int totalPackets = (dataLength + packet_char - 1) / packet_char;
+    int i, p, f;
+    printf("\n======================================================\n");
+    printf("                TCP / IP NETWORK LAYER                  \n");
+    printf("======================================================\n");
+    printf("\n   L5 - APPLICATION LAYER\n");
+    printf("Payload String : \"%s\"\n", fileData);
+    printf("Binary Stream  : ");
+    for (i = 0; i < dataLength; i++) {
+        Char_binary(fileData[i]);
+        printf(" ");
+    }
+    printf("\n------------------------------------------------------\n");
+    printf("\n   L4 - TRANSPORT LAYER   \n");
+    printf("Ports: %d -> %d\n", hashTable[srcIdx].port, hashTable[destIdx].port);
+    printf("Bits : "); 
+	Port_binary(hashTable[srcIdx].port);
+	printf("-> ");
+	Port_binary(hashTable[destIdx].port);
+    printf("\nLayer 5: ");
+    for (i = 0; i < dataLength; i++) { 
+		Char_binary(fileData[i]);
+		printf(" "); 
+		}
+    printf("\n------------------------------------------------------\n");
+    printf("\n   L3 - NETWORK LAYER   \n");
+    printf("URLs: %s -> %s\n", hashTable[srcIdx].url, hashTable[destIdx].url);
+    printf("Src URL: "); 
+	String_binary(hashTable[srcIdx].url);
+    printf("\nDst URL: "); 
+	String_binary(hashTable[destIdx].url);
+    printf("\nIPs: %s -> %s\n", hashTable[srcIdx].ip, hashTable[destIdx].ip);
+    printf("Src IP: "); 
+	Ip_binary(hashTable[srcIdx].ip);
+    printf("\nDst IP: "); 
+	Ip_binary(hashTable[destIdx].ip);
+    for (p = 0; p < totalPackets; p++) {
+        int p_start = p * packet_char;
+        int p_end = p_start + packet_char;
+        if (p_end > dataLength) 
+			p_end = dataLength;      
+		printf("Total Packet Datagram is %d\n",totalPackets);
+        printf("\n Packet Datagram %d:<<\n", p + 1);
+        printf("Layer 4 Header bits: ");
+		Port_binary(hashTable[srcIdx].port); 
+		Port_binary(hashTable[destIdx].port);
+        printf("\nLayer 5:");
+        for (i = p_start; i < p_end; i++) {
+            Char_binary(fileData[i]);
+            printf(" ");
+        }
+        printf("\n");
+    }
+    printf("------------------------------------------------------\n");
+    printf("\nL2 - DATA LINK LAYER\n");
+    for (p = 0; p < totalPackets; p++) {
+        int p_start = p * packet_char;
+        int p_end = p_start + packet_char;
+        int frames = (packet_char + frame_char - 1) / frame_char;
+        printf("\n Packet %d \n", p + 1);
+        for (f = 0; f < frames; f++) {
+            int f_start = p_start + (f * frame_char);
+            printf("  Frame Segment %d:\n", f + 1);
+            printf("MACs: %s -> %s\n", hashTable[srcIdx].mac, hashTable[destIdx].mac);
+            printf("Src: "); 
+			Mac_binary(hashTable[srcIdx].mac);
+            printf("\nDst: "); 
+			Mac_binary(hashTable[destIdx].mac);
+            printf("\n L3 Header bits: "); 
+			String_binary(hashTable[srcIdx].url);
+			String_binary(hashTable[destIdx].url); 
+			Ip_binary(hashTable[srcIdx].ip); 
+			Ip_binary(hashTable[destIdx].ip);
+            printf("\n L4 Header bits: "); 
+			Port_binary(hashTable[srcIdx].port);
+			Port_binary(hashTable[destIdx].port);
+            printf("\n    [Encapsulated Frame Payload] : ");
+            for (i = 0; i < frame_char; i++) {
+                int currIdx = f_start + i;
+                if (currIdx < dataLength && currIdx < p_end) {
+                    Char_binary(fileData[currIdx]);
+                } else {
+                    Char_binary(0);
+                }
+                printf(" ");
+            }
+            printf("(");
+            for (i = 0; i < frame_char; i++) {
+                int currIdx = f_start + i;
+                if (currIdx < dataLength && currIdx < p_end) {
+                    printf("%c", fileData[currIdx]);}
+		else {
+			printf("");
+		     }
+	     }
+	    printf(")\n");
+	    printf("Parity Frame Check Value:00000000\n");
+	   }
+	}
+	  printf("\n**********************************************************\n");
+    printf("                CHARACTER/BYTE ORIENTED STUFFING                 \n");
+    printf("************************************************************\n");
+    printf("SYN : 00010110\n");
+    printf("SYN : 00010110\n");
+    printf("SOH : 00000001\n");
+    printf("HEADER : ");
+    String_binary(hashTable[destIdx].url);
+	String_binary(hashTable[srcIdx].url);
+	Mac_binary(hashTable[destIdx].mac);
+	Mac_binary(hashTable[srcIdx].mac);
+	Ip_binary(hashTable[srcIdx].ip);
+	Port_binary(hashTable[srcIdx].port);
+    printf("\nSTX : 00000010\n");
+    Data_stuffing_binary(fileData);
+    printf("\nETX : 00000011\n");
+    printf("CRC : 0000000000000000\n");
+	printf("************************************************************\n");
+	printf("             SYSTEM EXECUTION COMPLETE            \n");
+	printf("************************************************************\n");
+	printf("------------------------------------------------------\n");
+	printf("\n[L1 - PHYSICAL LAYER]\n");
+	printf("Complete String Pipeline(8-Bit Layers Segments):\n  ");
+	String_binary(hashTable[destIdx].url);
+	String_binary(hashTable[srcIdx].url);
+	Mac_binary(hashTable[destIdx].mac);
+	Mac_binary(hashTable[srcIdx].mac);
+	Ip_binary(hashTable[srcIdx].ip);
+	Port_binary(hashTable[srcIdx].port);
+	for (p = 0; p < totalPackets; p++) {
+		int p_start = p * packet_char;
+		int frames = (packet_char + frame_char - 1) / frame_char;
+		int padding = frames * frame_char;
+		for (i = 0; i < padding; i++) {
+			int currIdx = p_start + i;
+			if (currIdx < dataLength && currIdx < (p_start + packet_char)) {
+				Char_binary(fileData[currIdx]);
+			} 
+			else {
+				Char_binary(0);
+			}
+			printf(" ");
+		}
+	}
+	printf("00000000\n");
+	printf("======================================================\n");
+	printf("             SYSTEM EXECUTION COMPLETE            \n");
+	printf("======================================================\n");
+}
+void processFileInput(char filename[],char srcUrl[],char destUrl[])
+ {
+    int ch, i;
+    printf("\nEnter filename: ");
+    scanf("%s", filename);
+    FILE *f = fopen(filename, "r");
+    if (!f) {
+        printf("[-] Error: File '%s' not found!\n", filename);
+        dataLength = -1;
+        return;
+    }
+    dataLength = 0;
+    while ((ch = fgetc(f)) != EOF && dataLength < File_Size - 1) {
+        fileData[dataLength++] = (char)ch;
+    }
+    fileData[dataLength] = '\0';
+    fclose(f);
+    if (dataLength > 0 && fileData[dataLength - 1] == '\n') {
+        fileData[--dataLength] = '\0';
+    }
+    Tcp_network_layer(srcUrl, destUrl);
+    printf("******************SENDER PART*******************\n");
+    printf("\nDATA BEFORE STUFFING\n");
+    printf("-------------------------------------\n");
+    printf("%s\n",fileData);
+    printf("-------------------------------------\n");
+    printf("\nDATA AFTER STUFFING\n");
+    printf("-------------------------------------\n");
+    Data_stuffing(fileData);
+    printf("\n-------------------------------------\n");
+}
+int main()
+{
+	char choice[Max_Choice],filename[File_Size],safe[File_Size];
+	char url[Max_URL], ip[Max_IP], mac[Max_MAC];
+	char srcUrl[Max_URL], destUrl[Max_URL];
+	int packet_size, frame_size, i;
+	for (i = 0; i < Hash_Size; i++) {
+		hashTable[i].is_occupied = 0;
+	}
+	Network_table(choice, url, ip, mac);
+	processFileInput(filename,srcUrl,destUrl);
+    if (dataLength <= 0)
+        return 1;
+    strcpy(safe,fileData);
+    printf("Enter packet size in BITS (e.g. 32): ");
+	if (scanf("%d", &packet_size) != 1 || packet_size <= 0) 
+		packet_size = 32;
+	printf("Enter frame size in BITS (e.g. 16): ");
+	if (scanf("%d", &frame_size) != 1 || frame_size <= 0) 
+		frame_size = 16;
+	Network_packets(safe,packet_size,frame_size);
+	return 0;
+}
