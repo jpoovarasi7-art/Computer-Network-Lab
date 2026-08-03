@@ -1,0 +1,214 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+/* receiver_hamming:
+   - reads codeword from a file (asked from user)
+   - asks user for redundant bits (r) or auto-detects if 0 entered
+   - extracts original data and displays it
+   - optionally flips a bit (user chooses position)
+   - checks odd parity and reports no-error or error (syndrome position)
+*/
+void receiver_hamming(void) {
+    char filename[256];
+    char line[1024];
+    char codeword_str[1024];
+    int *bits = NULL;
+    int n = 0;
+    int r_auto = 0;
+    int r = 0;
+    FILE *f = NULL;
+    int i, k;
+
+    /* Ask user for filename */
+    printf("Enter input filename containing the codeword: ");
+    if (fgets(filename, sizeof(filename), stdin) == NULL) {
+        fprintf(stderr, "No filename provided\n");
+        return;
+    }
+    /* strip newline */
+    {
+        size_t len = strlen(filename);
+        if (len > 0 && filename[len - 1] == '\n') filename[len - 1] = '\0';
+        if (filename[0] == '\0') {
+            fprintf(stderr, "Empty filename\n");
+            return;
+        }
+    }
+
+    f = fopen(filename, "r");
+    if (!f) {
+        fprintf(stderr, "Failed to open file '%s'\n", filename);
+        return;
+    }
+
+    /* Read first non-empty line */
+    codeword_str[0] = '\0';
+    while (fgets(line, sizeof(line), f) != NULL) {
+        /* trim whitespace and copy only 0/1 characters */
+        int p = 0;
+        int q = 0;
+        while (line[p] != '\0' && (line[p] == '\r' || line[p] == '\n')) p++;
+        /* copy 0/1 chars */
+        while (line[p] != '\0') {
+            if (line[p] == '0' || line[p] == '1') {
+                codeword_str[q++] = line[p];
+            } else if (isspace((unsigned char)line[p])) {
+                /* skip */
+            } else {
+                /* invalid char: ignore */
+            }
+            p++;
+        }
+        codeword_str[q] = '\0';
+        if (q > 0) break; /* got a bit string */
+    }
+    fclose(f);
+
+    if (codeword_str[0] == '\0') {
+        fprintf(stderr, "No codeword (0/1) found in file '%s'\n", filename);
+        return;
+    }
+
+    /* length and allocate 1-based bits array */
+    n = (int)strlen(codeword_str);
+    bits = (int *)calloc(n + 1, sizeof(int));
+    if (!bits) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return;
+    }
+    printf("Codeword is %s\n",codeword_str);
+    /* Fill bits[1..n] from codeword_str (left-to-right -> position 1..n) */
+    for (i = 1; i <= n; ++i) {
+        bits[i] = (codeword_str[i - 1] == '1') ? 1 : 0;
+    }
+
+
+    /* Ask user for r (0 to auto-detect) */
+    printf("Detected codeword length: %d\n", n);
+    printf("Enter number of redundant bits: ");
+    {
+        char buf[32];
+        if (fgets(buf, sizeof(buf), stdin) == NULL) {
+            free(bits);
+            return;
+        }
+        r = atoi(buf);
+    }
+
+    /* Extract original data (positions that are not powers of two) */
+    {
+        char *data = (char *)malloc(n + 1);
+        if (!data) {
+            fprintf(stderr, "Memory allocation failed\n");
+            free(bits);
+            return;
+        }
+        int idx = 0;
+        for (i = 1; i <= n; ++i) {
+            if ((i & (i - 1)) == 0) {
+                /* parity position, skip */
+            } else {
+                data[idx++] = bits[i] ? '1' : '0';
+            }
+        }
+        data[idx] = '\0';
+        printf("\nExtracted original data: %s\n", data);
+        free(data);
+    }
+
+    /* Function to check odd parity groups and compute syndrome */
+    {
+        int syndrome = 0;
+        int ok_all = 1;
+        for (i = 0; i < r; ++i) {
+            int pos = 1 << i;
+            int px = 0;
+            for (k = 1; k <= n; ++k) {
+                if (k & pos) px ^= bits[k];
+            }
+            /* For ODD parity we expect px == 1 */
+            if (px != 1) {
+                ok_all = 0;
+                syndrome += pos;
+            }
+        }
+        if (ok_all) {
+            printf("Parity check (before any simulated change): ODD parity OK -> No error detected\n");
+        } else {
+            printf("Parity check (before any simulated change): Error detected. Syndrome = %d\n", syndrome);
+            if (syndrome >= 1 && syndrome <= n) {
+                printf("Error at position %d (bit value was %d)\n", syndrome, bits[syndrome]);
+            } else {
+                printf("Syndrome %d is out of range (unable to locate single-bit error)\n", syndrome);
+            }
+        }
+    }
+
+    /* Ask user to optionally change (flip) a bit in the codeword */
+    printf("\nDo you want to flip a bit in the codeword to simulate an error? (y/n): ");
+    {
+        char resp[8];
+        if (fgets(resp, sizeof(resp), stdin) == NULL) {
+            free(bits);
+            return;
+        }
+        if (resp[0] == 'y' || resp[0] == 'Y') {
+            int posflip = 0;
+            printf("Enter position to flip (1..%d): ", n);
+            {
+                char buf2[32];
+                if (fgets(buf2, sizeof(buf2), stdin) == NULL) {
+                    free(bits);
+                    return;
+                }
+                posflip = atoi(buf2);
+            }
+            if (posflip < 1 || posflip > n) {
+                printf("Invalid position. No flip performed.\n");
+            } else {
+                bits[posflip] = 1 - bits[posflip];
+                printf("Flipped bit at position %d. New codeword: ", posflip);
+                for (i = 1; i <= n; ++i) {
+                    putchar(bits[i] ? '1' : '0');
+                }
+                putchar('\n');
+
+                /* Re-check parity after flip */
+                int syndrome2 = 0;
+                int ok_all2 = 1;
+                for (i = 0; i < r; ++i) {
+                    int pos = 1 << i;
+                    int px = 0;
+                    for (k = 1; k <= n; ++k) {
+                        if (k & pos) px ^= bits[k];
+                    }
+                    if (px != 1) {
+                        ok_all2 = 0;
+                        syndrome2 += pos;
+                    }
+                }
+                if (ok_all2) {
+                    printf("Parity check (after flip): ODD parity OK -> No error detected\n");
+                } else {
+                    printf("Parity check (after flip): Error detected. Syndrome = %d\n", syndrome2);
+                    if (syndrome2 >= 1 && syndrome2 <= n) {
+                        printf("Error at position %d (bit value now %d)\n", syndrome2, bits[syndrome2]);
+                    } else {
+                        printf("Syndrome %d is out of range (unable to locate single-bit error)\n", syndrome2);
+                    }
+                }
+            }
+        } else {
+            printf("No bit flipped.\n");
+        }
+    }
+
+    free(bits);
+}
+
+int main(void) {
+    receiver_hamming();
+    return 0;
+}
