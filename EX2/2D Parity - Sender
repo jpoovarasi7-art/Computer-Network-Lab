@@ -1,0 +1,156 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void sender_write_matrix(void) {
+    char word[1024];
+    char filename[256];
+    int cols = 8; /* bits per character (MSB..LSB) */
+    int rows = 0;
+    int *data = NULL;       /* rows * cols */
+    int *row_parity = NULL; /* rows */
+    int *col_count = NULL;  /* cols (intermediate counts) */
+    int *col_parity = NULL; /* cols */
+    int overall_count = 0;
+    int overall_parity = 0;
+    int i, j;
+
+    printf("Enter a word: ");
+    if (fgets(word, sizeof(word), stdin) == NULL) return;
+    /* trim newline */
+    {
+        size_t L = strlen(word);
+        if (L > 0 && word[L - 1] == '\n') word[L - 1] = '\0';
+    }
+    if (word[0] == '\0') {
+        fprintf(stderr, "No input provided.\n");
+        return;
+    }
+
+    rows = (int)strlen(word);
+
+    data = (int *)malloc(rows * cols * sizeof(int));
+    row_parity = (int *)malloc(rows * sizeof(int));
+    col_count = (int *)malloc(cols * sizeof(int));
+    col_parity = (int *)malloc(cols * sizeof(int));
+    if (!data || !row_parity || !col_count || !col_parity) {
+        fprintf(stderr, "Memory allocation failed\n");
+        free(data); free(row_parity); free(col_count); free(col_parity);
+        return;
+    }
+
+    /* initialize column counts */
+    for (j = 0; j < cols; ++j) col_count[j] = 0;
+
+    overall_count = 0;
+    /* fill data and compute row parity and column counts */
+    for (i = 0; i < rows; ++i) {
+        unsigned char c = (unsigned char)word[i];
+        int row_count = 0;
+        for (j = 0; j < cols; ++j) {
+            int shift = cols - 1 - j;
+            int bit = ((c >> shift) & 1) ? 1 : 0;
+            data[i * cols + j] = bit;
+            row_count += bit;
+            col_count[j] += bit;
+        }
+        overall_count += row_count;
+        /* odd parity: parity bit = 1 if row_count is even, else 0 */
+        if ((row_count % 2) == 0) row_parity[i] = 1; else row_parity[i] = 0;
+    }
+
+    /* compute column parity bits */
+    int col_parity_ones_count = 0;
+    for (j = 0; j < cols; ++j) {
+        if ((col_count[j] % 2) == 0) {
+            col_parity[j] = 1;
+        } else {
+            col_parity[j] = 0;
+        }
+        col_parity_ones_count += col_parity[j];
+    }
+
+    /* Compute overall parity to ensure the parity row itself retains ODD parity */
+    if ((col_parity_ones_count % 2) == 0) {
+        overall_parity = 1;
+    } else {
+        overall_parity = 0;
+    }
+
+    /* PRINT THE VISUAL TABLE TO CONSOLE FIRST */
+    printf("\n=== 2D ODD PARITY (minimal) ===\n");
+    printf("Input word: \"%s\"\n", word);
+    printf("Rows: %d   Cols: %d (bits per char MSB..LSB)\n", rows, cols);
+    printf("Parity type: ODD (row, column, overall)\n\n");
+
+    printf("-------------------------------------------------\n");
+    printf("| R | Char | b7 b6 b5 b4 b3 b2 b1 b0 | RParity |\n");
+    printf("-------------------------------------------------\n");
+    for (i = 0; i < rows; ++i) {
+        printf("| %d |  %c   | ", i + 1, word[i]);
+        for (j = 0; j < cols; ++j) {
+            printf("%d ", data[i * cols + j]);
+        }
+        printf("|   %d     |\n", row_parity[i]);
+    }
+    printf("-------------------------------------------------\n");
+    printf("|    | CParity | ");
+    for (j = 0; j < cols; ++j) {
+        printf("%d ", col_parity[j]);
+    }
+    printf("| OvrP=%d |\n", overall_parity);
+    printf("-------------------------------------------------\n\n");
+
+    /* Ask for output filename */
+    printf("Enter output filename (default: matrix.txt): ");
+    if (fgets(filename, sizeof(filename), stdin) == NULL) {
+        strcpy(filename, "matrix.txt");
+    } else {
+        size_t Lf = strlen(filename);
+        if (Lf > 0 && filename[Lf - 1] == '\n') filename[Lf - 1] = '\0';
+        if (filename[0] == '\0') strcpy(filename, "matrix.txt");
+    }
+
+    /* Write machine-friendly file format */
+    {
+        FILE *f = fopen(filename, "w");
+        if (!f) {
+            fprintf(stderr, "Failed to open '%s' for writing\n", filename);
+            free(data); free(row_parity); free(col_count); free(col_parity);
+            return;
+        }
+
+        /* header */
+        fprintf(f, "%d %d\n", rows, cols);
+
+        /* rows: bits then row_parity */
+        for (i = 0; i < rows; ++i) {
+            for (j = 0; j < cols; ++j) {
+                if (j > 0) fprintf(f, " ");
+                fprintf(f, "%d", data[i * cols + j]);
+            }
+            fprintf(f, " %d\n", row_parity[i]);
+        }
+
+        /* final line: column parity bits then overall parity */
+        for (j = 0; j < cols; ++j) {
+            if (j > 0) fprintf(f, " ");
+            fprintf(f, "%d", col_parity[j]);
+        }
+        fprintf(f, " %d\n", overall_parity);
+
+        fclose(f);
+        printf("Matrix written to '%s'\n", filename);
+    }
+
+    free(data);
+    free(row_parity);
+    free(col_count);
+    free(col_parity);
+}
+
+int main(void) {
+    sender_write_matrix();
+    return 0;
+}
+
