@@ -1,0 +1,646 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define Max_URL 50
+#define Max_IP 16
+#define Max_MAC 18
+#define Hash_Size 10
+#define File_Size 4000
+#define Max_Choice 15
+struct HashEntry {
+    char url[Max_URL];
+    char ip[Max_IP];
+    char mac[Max_MAC];
+    int port;
+    int is_occupied;
+};
+struct HashEntry hashTable [10];
+static unsigned int randomSeed = 5321;
+static char fileData[File_Size];
+static char outname[File_Size];
+static int dataLength = 0;
+static int srcIdx = -1;
+static int destIdx = -1;
+static char poly[50];
+static int len_poly = 0;
+static char rem[200];
+static char codeword[200];
+static char all_frame_crcs[20000];
+static int getHashIndex(const char url[Max_URL]);
+static int getRandomPort(void);
+static void insertNode(const char url[Max_URL], const char ip[Max_IP], const char mac[Max_MAC], int port);
+static int searchTable(const char url[Max_URL]);
+static void printTable(void);
+static void Char_binary(unsigned char ch);
+static void String_binary(const char *str);
+static void Ip_binary(const char ip[Max_IP]);
+static void Mac_binary(const char mac[Max_MAC]);
+static void Port_binary(int port);
+static void Sender(const char data[], const char poly[]);
+static void build_stuffed_chars(const char *input, char *out_stuffed, int out_sz);
+static void build_contiguous_bits(const char *stuffed, char *out_bits, int out_sz);
+static void build_payload_bits_whole(const char *fileData, char *payload_spaced, int psz, char *payload_contig, int csz);
+static void Network_packets(char fileData[], int packet_size_bits, int frame_size_bits);
+static void processFileInput(char filename[]);
+static void String_binary_file(FILE *f, const char *str);
+static void Data_stuffing_binary(const char fileData[]);
+int char_sender_cli(void);
+static int getHashIndex(const char url[Max_URL]) {
+    int sum = 0;
+    size_t i;
+    for (i = 0; url[i] != '\0'; i++) sum += (unsigned char)url[i];
+    return sum % Hash_Size;
+}
+static int getRandomPort(void) {
+    randomSeed = (randomSeed * 1103515245u + 12345u) & 0x7fffffff;
+    return 1024 + (randomSeed % (49151 - 1024 + 1));
+}
+static void insertNode(const char url[Max_URL], const char ip[Max_IP], const char mac[Max_MAC], int port) {
+    int index = getHashIndex(url);
+    int or_index = index;
+    while (hashTable[index].is_occupied == 1) {
+        if (strcmp(hashTable[index].url, url) == 0) {
+            strncpy(hashTable[index].ip, ip, Max_IP - 1);
+            hashTable[index].ip[Max_IP - 1] = '\0';
+            strncpy(hashTable[index].mac, mac, Max_MAC - 1);
+            hashTable[index].mac[Max_MAC - 1] = '\0';
+            hashTable[index].port = port;
+            return;
+        }
+        index = (index + 1) % Hash_Size;
+        if (index == or_index) return; /* table full */
+    }
+    strncpy(hashTable[index].url, url, Max_URL - 1);
+    hashTable[index].url[Max_URL - 1] = '\0';
+    strncpy(hashTable[index].ip, ip, Max_IP - 1);
+    hashTable[index].ip[Max_IP - 1] = '\0';
+    strncpy(hashTable[index].mac, mac, Max_MAC - 1);
+    hashTable[index].mac[Max_MAC - 1] = '\0';
+    hashTable[index].port = port;
+    hashTable[index].is_occupied = 1;
+}
+static int searchTable(const char url[Max_URL]) {
+    int index = getHashIndex(url);
+    int or_index = index;
+    while (hashTable[index].is_occupied != 0) {
+        if (strcmp(hashTable[index].url, url) == 0) return index;
+        index = (index + 1) % Hash_Size;
+        if (index == or_index) break;
+    }
+    return -1;
+}
+static void printTable(void) {
+    int i;
+    printf("\n=================== CURRENT HASH TABLE ===================\n");
+    printf("%-6s | %-18s | %-15s | %-17s | %-6s\n", "Index", "URL Link", "IP Address", "MAC Address", "Port");
+    printf("----------------------------------------------------------------------\n");
+    for (i = 0; i < Hash_Size; i++) {
+        if (hashTable[i].is_occupied)
+            printf("%-6d | %-18s | %-15s | %-17s | %-6d\n", i, hashTable[i].url, hashTable[i].ip, hashTable[i].mac, hashTable[i].port);
+        else
+            printf("%-6d | %-18s | %-15s | %-17s | %-6s\n", i, "Empty", "-", "-", "-");
+    }
+    printf("======================================================================\n");
+}
+static void Char_binary(unsigned char ch) {
+    int i;
+    for (i = 7; i >= 0; i--) putchar(((ch >> i) & 1) ? '1' : '0');
+}
+static void String_binary(const char *str) {
+    size_t i;
+    for (i = 0; str[i] != '\0'; i++) {
+        Char_binary((unsigned char)str[i]);
+        putchar(' ');
+    }
+}
+static void Ip_binary(const char ip[Max_IP]) {
+    int v1, v2, v3, v4, p, i;
+    int pieces[4];
+    if (sscanf(ip, "%d.%d.%d.%d", &v1, &v2, &v3, &v4) != 4) return;
+    pieces[0] = v1; pieces[1] = v2; pieces[2] = v3; pieces[3] = v4;
+    for (p = 0; p < 4; p++) {
+        for (i = 7; i >= 0; i--) putchar(((pieces[p] >> i) & 1) ? '1' : '0');
+        putchar(' ');
+    }
+}
+static void Mac_binary(const char mac[Max_MAC]) {
+    unsigned int m1, m2, m3, m4;
+    int p, i;
+    unsigned int pieces[4];
+    if (sscanf(mac, "%x:%x:%x:%x", &m1, &m2, &m3, &m4) != 4) return;
+    pieces[0] = m1; pieces[1] = m2; pieces[2] = m3; pieces[3] = m4;
+    for (p = 0; p < 4; p++) {
+        for (i = 7; i >= 0; i--) putchar(((pieces[p] >> i) & 1) ? '1' : '0');
+        putchar(' ');
+    }
+}
+static void Port_binary(int port) {
+    int i;
+    for (i = 15; i >= 0; i--) {
+        putchar(((port >> i) & 1) ? '1' : '0');
+        if (i == 8) putchar(' ');
+    }
+    putchar(' ');
+}
+static void Sender(const char data[], const char poly[]) {
+    char div[20000];
+    char temp[200];
+    int i, j;
+    len_poly = (int)strlen(poly);
+    strcpy(div, data);
+    for (i = 0; i < len_poly - 1; i++) strcat(div, "0");
+    strncpy(temp, div, len_poly);
+    temp[len_poly] = '\0';
+    {
+        int div_len = (int)strlen(div);
+        for (i = len_poly; i <= div_len; i++) {
+            if (temp[0] == '1') {
+                for (j = 1; j < len_poly; j++)
+                    temp[j] = (temp[j] == poly[j]) ? '0' : '1';
+            }
+            for (j = 0; j < len_poly - 1; j++) temp[j] = temp[j + 1];
+            if (i < div_len) temp[len_poly - 1] = div[i];
+            else temp[len_poly - 1] = '\0';
+        }
+    }
+    strcpy(rem, temp);
+    strcpy(codeword, data);
+    strcat(codeword, rem);
+}
+static void build_stuffed_chars(const char *input, char *out_stuffed, int out_sz) {
+    char copy[File_Size];
+    const char delim[] = " ";
+    char *tok;
+    int first = 1;
+    int len;
+    strncpy(copy, input, sizeof(copy)-1);
+    copy[sizeof(copy)-1] = '\0';
+    out_stuffed[0] = '\0';
+    tok = strtok(copy, delim);
+    while (tok != NULL) {
+        if (!first) {
+            if ((int)strlen(out_stuffed) + 2 < out_sz) strcat(out_stuffed, " ");
+        }
+        if (strcmp(tok, "DLE") == 0 || strcmp(tok, "ETX") == 0) {
+            if ((int)strlen(out_stuffed) + 5 < out_sz) {
+                strcat(out_stuffed, "DLE");
+                strcat(out_stuffed, " ");
+                strcat(out_stuffed, tok);
+            }
+        } else {
+            len = (int)strlen(tok);
+            if ((int)strlen(out_stuffed) + len + 1 < out_sz) {
+                strcat(out_stuffed, tok);
+            }
+        }
+        first = 0;
+        tok = strtok(NULL, delim);
+    }
+}
+static void build_contiguous_bits(const char *stuffed, char *out_bits, int out_sz) {
+    int i, b;
+    int pos = 0;
+    out_bits[0] = '\0';
+    for (i = 0; stuffed[i] != '\0'; ++i) {
+        unsigned char ch = (unsigned char)stuffed[i];
+        for (b = 7; b >= 0; --b) {
+            if (pos + 1 < out_sz) {
+                out_bits[pos++] = ((ch >> b) & 1) ? '1' : '0';
+            }
+        }
+    }
+    out_bits[pos] = '\0';
+}
+static void build_payload_bits_whole(const char *fileData, char *payload_spaced, int psz, char *payload_contig, int csz) {
+    char copy[File_Size];
+    char tmpbuf[File_Size];
+    int first = 1;
+    int i, b;
+    strncpy(copy, fileData, sizeof(copy)-1);
+    copy[sizeof(copy)-1] = '\0';
+    tmpbuf[0] = '\0';
+    payload_spaced[0] = '\0';
+    payload_contig[0] = '\0';
+    {
+        const char delim[] = " ";
+        char *tok = strtok(copy, delim);
+        while (tok != NULL) {
+            if (!first) strcat(tmpbuf, " ");
+            if (strcmp(tok, "DLE") == 0 || strcmp(tok, "ETX") == 0) {
+                strcat(tmpbuf, "DLE");
+                strcat(tmpbuf, " ");
+                strcat(tmpbuf, tok);
+            } else {
+                strcat(tmpbuf, tok);
+            }
+            first = 0;
+            tok = strtok(NULL, delim);
+        }
+    }
+    for (i = 0; tmpbuf[i] != '\0'; ++i) {
+        unsigned char ch = (unsigned char)tmpbuf[i];
+        int l = (int)strlen(payload_spaced);
+        if (l + 9 < psz) {
+            for (b = 7; b >= 0; --b) payload_spaced[l + (7 - b)] = ((ch >> b) & 1) ? '1' : '0';
+            payload_spaced[l + 8] = '\0';
+            strcat(payload_spaced, " ");
+        }
+        {
+            int lc = (int)strlen(payload_contig);
+            if (lc + 8 < csz) {
+                for (b = 7; b >= 0; --b) payload_contig[lc + (7 - b)] = ((ch >> b) & 1) ? '1' : '0';
+                payload_contig[lc + 8] = '\0';
+            }
+        }
+    }
+}
+static void Network_packets(char fileData[], int packet_size_bits, int frame_size_bits) {
+    int packet_char = packet_size_bits / 8;
+    if (packet_char <= 0) packet_char = 1;
+    int frame_char = frame_size_bits / 8;
+    if (frame_char <= 0) frame_char = 1;
+    int totalPackets = (dataLength + packet_char - 1) / packet_char;
+    int p, f, i;
+    all_frame_crcs[0] = '\0';
+    for (p = 0; p < totalPackets; p++) {
+        int p_start = p * packet_char;
+        int p_end = p_start + packet_char;
+        int frames = (packet_char + frame_char - 1) / frame_char;
+        printf("\n Packet %d\n", p + 1);
+        for (f = 0; f < frames; f++) {
+            int f_start = p_start + (f * frame_char);
+            char frame_payload[512];
+            int payload = 0;
+            for (i = 0; i < frame_char; i++) {
+                int currIdx = f_start + i;
+                if (currIdx < dataLength && currIdx < p_end) {
+                    frame_payload[payload++] = fileData[currIdx];
+                } else {
+                    frame_payload[payload++] = 0;
+                }
+            }
+            frame_payload[payload] = '\0';
+            printf("  Frame Segment %d:\n", f + 1);
+            printf("MACs: %s -> %s\n", hashTable[srcIdx].mac, hashTable[destIdx].mac);
+            printf("Src: ");
+            Mac_binary(hashTable[srcIdx].mac);
+            printf("\nDst: ");
+            Mac_binary(hashTable[destIdx].mac);
+            printf(" ");
+            for (i = 0; i < frame_char; i++) {
+                int currIdx = f_start + i;
+                if (currIdx < dataLength && currIdx < p_end) {
+                    Char_binary((unsigned char)fileData[currIdx]);
+                } else {
+                    Char_binary(0);
+                }
+                printf(" ");
+            }
+            printf("\n(");
+            for (i = 0; i < frame_char; i++) {
+                int currIdx = f_start + i;
+                if (currIdx < dataLength && currIdx < p_end) {
+                    printf("%c", fileData[currIdx]);
+                }
+            }
+            printf(")\n\n");
+            printf(" ****  ****  ****  ****  ****  ****  ****  ****  ****  ****  ****  **** \n");
+            printf("               CHARACTER/BYTE ORIENTED STUFFING\n");
+            printf(" ****  ****  ****  ****  ****  ****  ****  ****  ****  ****  ****  **** \n");
+            printf("SYN : 00010110\nSYN : 00010110\nSOH : 00000001\n");
+            printf("HEADER :\n");
+            printf("  Dest URL : "); String_binary(hashTable[destIdx].url); printf("\n");
+            printf("  Src URL  : "); String_binary(hashTable[srcIdx].url); printf("\n");
+            printf("  Dest MAC : "); Mac_binary(hashTable[destIdx].mac); printf("\n");
+            printf("  Src MAC  : "); Mac_binary(hashTable[srcIdx].mac); printf("\n");
+            printf("  Src IP   : "); Ip_binary(hashTable[srcIdx].ip); printf("\n");
+            printf("  Src Port : "); Port_binary(hashTable[srcIdx].port); printf("\n\n");
+            printf("STX : 00000010\n\n");
+            char stuffed[1024];
+            char temp[512];
+            int k;
+            for (k = 0; k < payload; k++) temp[k] = frame_payload[k];
+            temp[payload] = '\0';
+            stuffed[0] = '\0';
+            build_stuffed_chars(temp, stuffed, sizeof(stuffed));
+            printf("Binary (char-wise) of stuffed characters:\n");
+            if (stuffed[0] != '\0') {
+                String_binary(stuffed);
+                printf("\n\n");
+            } else {
+                printf("\n");
+            }
+            char contig_bits[5000];
+            contig_bits[0] = '\0';
+            build_contiguous_bits(stuffed, contig_bits, sizeof(contig_bits));
+            if (contig_bits[0] != '\0' && poly[0] != '\0') {
+                Sender(contig_bits, poly);
+                printf("ETX : 00000011\n");
+                printf("CRC: %s\n", codeword);
+                if ((int)strlen(all_frame_crcs) + (int)strlen(codeword) + 2 < (int)sizeof(all_frame_crcs)) {
+                    if (all_frame_crcs[0] != '\0') strcat(all_frame_crcs, " ");
+                    strcat(all_frame_crcs, codeword);
+                }
+            } else {
+                printf("ETX : 00000011\n");
+                printf("CRC:0000000000000000\n");
+                if ((int)strlen(all_frame_crcs) + 17 < (int)sizeof(all_frame_crcs)) {
+                    if (all_frame_crcs[0] != '\0') strcat(all_frame_crcs, " ");
+                    strcat(all_frame_crcs, "0000000000000000");
+                }
+            }
+        }
+    }
+    printf("\n****************************************************\n");
+    printf("             SYSTEM EXECUTION COMPLETE            \n");
+    printf("******************************************************\n");
+}
+static void processFileInput(char filename[]) {
+    int ch;
+    printf("\nEnter filename: ");
+    if (scanf("%s", filename) != 1) {
+        printf("No filename provided.\n");
+        dataLength = -1;
+        return;
+    }
+    {
+        FILE *f = fopen(filename, "r");
+        if (!f) {
+            printf("[-] Error: File '%s' not found!\n", filename);
+            dataLength = -1;
+            return;
+        }
+        dataLength = 0;
+        while ((ch = fgetc(f)) != EOF && dataLength < File_Size - 1) {
+            fileData[dataLength++] = (char)ch;
+        }
+        fileData[dataLength] = '\0';
+        fclose(f);
+        if (dataLength > 0 && fileData[dataLength - 1] == '\n') dataLength--;
+        printf("\n ****  ****  ****  ****  **SENDER PART**  ****  ****  ****  **** *\n\n");
+        printf("DATA BEFORE STUFFING\n-------------------------------------\n");
+        printf("%s\n", fileData);
+        printf("-------------------------------------\n\n");
+        printf("DATA AFTER STUFFING\n-------------------------------------\n");
+        {
+            char tmp[File_Size];
+            tmp[0] = '\0';
+            build_stuffed_chars(fileData, tmp, sizeof(tmp));
+            printf("%s\n", tmp);
+        }
+        printf("\n-------------------------------------\n");
+    }
+}
+static void String_binary_file(FILE *f, const char *str) {
+    if (f == NULL || str == NULL) return;
+    size_t i;
+    for (i = 0; str[i] != '\0'; ++i) {
+        unsigned char ch = (unsigned char)str[i];
+        int b;
+        for (b = 7; b >= 0; --b) fputc(((ch >> b) & 1) ? '1' : '0', f);
+        fputc(' ', f);
+    }
+}
+static void Data_stuffing_binary(const char fileData[]) {
+    if (outname[0] == '\0') {
+        printf("Output filename not set; skipping Data_stuffing_binary.\n");
+        return;
+    }
+    FILE *outputFile = fopen(outname, "w");
+    if (outputFile == NULL) {
+        printf("Error opening file '%s' for writing!\n", outname);
+        return;
+    }
+    char copy[File_Size];
+    strncpy(copy, fileData, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    const char sample[] = " ";
+    char *sub = strtok(copy, sample);
+    while (sub != NULL) {
+        if (strcmp(sub, "DLE") == 0 || strcmp(sub, "ETX") == 0) {
+            String_binary("DLE");
+            String_binary_file(outputFile, "DLE");
+            printf(" ");
+            fputc(' ', outputFile);
+            String_binary(sub);
+            String_binary_file(outputFile, sub);
+            printf(" ");
+            fputc(' ', outputFile);
+        } else {
+            String_binary(sub);
+            String_binary_file(outputFile, sub);
+            printf(" ");
+            fputc(' ', outputFile);
+        }
+        sub = strtok(NULL, sample);
+    }
+    fprintf(outputFile, "%d", dataLength);
+    fclose(outputFile);
+}
+int char_sender_cli(void) {
+    char choice[Max_Choice];
+    char filename[File_Size];
+    char url[Max_URL], ip[Max_IP], mac[Max_MAC];
+    char srcUrl[Max_URL], destUrl[Max_URL];
+    int packet_size_bits, frame_size_bits;
+    int i;
+    int idx;
+    for (i = 0; i < Hash_Size; i++) hashTable[i].is_occupied = 0;
+    while (1) {
+        printTable();
+        printf("\nModify table? (insert/delete/no): ");
+        if (scanf("%s", choice) != 1) return 0;
+        if (strcmp(choice, "insert") == 0) {
+            printf("Enter URL: "); scanf("%s", url);
+            printf("Enter IP Address: "); scanf("%s", ip);
+            printf("Enter Mac Address: "); scanf("%s", mac);
+            int portnumber = getRandomPort();
+            insertNode(url, ip, mac, portnumber);
+            printf("Inserted node. Port: %d\n", portnumber);
+        } else if (strcmp(choice, "delete") == 0) {
+            printf("Enter URL to delete: "); scanf("%s", url);
+            idx = searchTable(url);
+            if (idx != -1) { hashTable[idx].is_occupied = 0; printf("Deleted %s\n", url); }
+            else printf("Not found\n");
+        } else if (strcmp(choice, "no") == 0) break;
+        else printf("Invalid choice\n");
+    }
+    processFileInput(filename);
+    if (dataLength <= 0) return 1;
+    printf("Enter packet size in BITS (e.g. 32): ");
+    if (scanf("%d", &packet_size_bits) != 1 || packet_size_bits <= 0) packet_size_bits = 32;
+    printf("Enter frame size in BITS (e.g. 16): ");
+    if (scanf("%d", &frame_size_bits) != 1 || frame_size_bits <= 0) frame_size_bits = 16;
+    printf("\nEnter output filename (single binary file for all frames): ");
+    if (scanf("%s", outname) != 1) outname[0] = '\0';
+    {
+        FILE *f = fopen(outname, "w");
+        if (f) fclose(f);
+    }
+    printf("\nEnter CRC (polynomial as bit string, e.g. 1101): ");
+    if (scanf("%s", poly) != 1) poly[0] = '\0';
+    printf("\nEnter Source URL: ");
+    if (scanf("%s", srcUrl) != 1) return 1;
+    srcIdx = searchTable(srcUrl);
+    if (srcIdx == -1) { printf("Source not found\n"); return 1; }
+    printf("Enter Destination URL: ");
+    if (scanf("%s", destUrl) != 1) return 1;
+    destIdx = searchTable(destUrl);
+    if (destIdx == -1) { printf("Destination not found\n"); return 1; }
+    {
+        char header_spaced[20000];
+        char header_contig[20000];
+        char payload_spaced[20000];
+        char payload_contig[20000];
+        header_spaced[0] = '\0';
+        header_contig[0] = '\0';
+        payload_spaced[0] = '\0';
+        payload_contig[0] = '\0';
+        {
+            int ii, bb;
+            for (ii = 0; hashTable[destIdx].url[ii] != '\0'; ++ii) {
+                unsigned char ch = (unsigned char)hashTable[destIdx].url[ii];
+                int l = (int)strlen(header_spaced);
+                if (l + 9 < (int)sizeof(header_spaced)) {
+                    for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((ch >> bb) & 1) ? '1' : '0';
+                    header_spaced[l + 8] = '\0';
+                    strcat(header_spaced, " ");
+                }
+                l = (int)strlen(header_contig);
+                if (l + 8 < (int)sizeof(header_contig)) {
+                    for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((ch >> bb) & 1) ? '1' : '0';
+                    header_contig[l + 8] = '\0';
+                }
+            }
+            for (ii = 0; hashTable[srcIdx].url[ii] != '\0'; ++ii) {
+                unsigned char ch = (unsigned char)hashTable[srcIdx].url[ii];
+                int l = (int)strlen(header_spaced);
+                if (l + 9 < (int)sizeof(header_spaced)) {
+                    for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((ch >> bb) & 1) ? '1' : '0';
+                    header_spaced[l + 8] = '\0';
+                    strcat(header_spaced, " ");
+                }
+                l = (int)strlen(header_contig);
+                if (l + 8 < (int)sizeof(header_contig)) {
+                    for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((ch >> bb) & 1) ? '1' : '0';
+                    header_contig[l + 8] = '\0';
+                }
+            }
+        }
+        {
+            unsigned int m1,m2,m3,m4;
+            int ii, bb;
+            if (sscanf(hashTable[destIdx].mac, "%x:%x:%x:%x", &m1,&m2,&m3,&m4) == 4) {
+                unsigned char bytes[4];
+                bytes[0] = (unsigned char)m1; bytes[1] = (unsigned char)m2;
+                bytes[2] = (unsigned char)m3; bytes[3] = (unsigned char)m4;
+                for (ii = 0; ii < 4; ++ii) {
+                    int l = (int)strlen(header_spaced);
+                    if (l + 9 < (int)sizeof(header_spaced)) {
+                        for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_spaced[l + 8] = '\0';
+                        strcat(header_spaced, " ");
+                    }
+                    l = (int)strlen(header_contig);
+                    if (l + 8 < (int)sizeof(header_contig)) {
+                        for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_contig[l + 8] = '\0';
+                    }
+                }
+            }
+            if (sscanf(hashTable[srcIdx].mac, "%x:%x:%x:%x", &m1,&m2,&m3,&m4) == 4) {
+                unsigned char bytes[4];
+                bytes[0] = (unsigned char)m1; bytes[1] = (unsigned char)m2;
+                bytes[2] = (unsigned char)m3; bytes[3] = (unsigned char)m4;
+                for (ii = 0; ii < 4; ++ii) {
+                    int l = (int)strlen(header_spaced);
+                    if (l + 9 < (int)sizeof(header_spaced)) {
+                        for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_spaced[l + 8] = '\0';
+                        strcat(header_spaced, " ");
+                    }
+                    l = (int)strlen(header_contig);
+                    if (l + 8 < (int)sizeof(header_contig)) {
+                        for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_contig[l + 8] = '\0';
+                    }
+                }
+            }
+        }
+        {
+            int v1,v2,v3,v4;
+            int ii, bb;
+            if (sscanf(hashTable[srcIdx].ip, "%d.%d.%d.%d", &v1,&v2,&v3,&v4) == 4) {
+                unsigned char bytes[4];
+                bytes[0] = (unsigned char)v1; bytes[1] = (unsigned char)v2;
+                bytes[2] = (unsigned char)v3; bytes[3] = (unsigned char)v4;
+                for (ii = 0; ii < 4; ++ii) {
+                    int l = (int)strlen(header_spaced);
+                    if (l + 9 < (int)sizeof(header_spaced)) {
+                        for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_spaced[l + 8] = '\0';
+                        strcat(header_spaced, " ");
+                    }
+                    l = (int)strlen(header_contig);
+                    if (l + 8 < (int)sizeof(header_contig)) {
+                        for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((bytes[ii] >> bb) & 1) ? '1' : '0';
+                        header_contig[l + 8] = '\0';
+                    }
+                }
+            }
+        }
+        {
+            unsigned char high = (unsigned char)((hashTable[srcIdx].port >> 8) & 0xFF);
+            unsigned char low  = (unsigned char)(hashTable[srcIdx].port & 0xFF);
+            int bb;
+            int l = (int)strlen(header_spaced);
+            if (l + 9 < (int)sizeof(header_spaced)) {
+                for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((high >> bb) & 1) ? '1' : '0';
+                header_spaced[l + 8] = '\0';
+                strcat(header_spaced, " ");
+            }
+            l = (int)strlen(header_contig);
+            if (l + 8 < (int)sizeof(header_contig)) {
+                for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((high >> bb) & 1) ? '1' : '0';
+                header_contig[l + 8] = '\0';
+            }
+            l = (int)strlen(header_spaced);
+            if (l + 9 < (int)sizeof(header_spaced)) {
+                for (bb = 7; bb >= 0; --bb) header_spaced[l + (7 - bb)] = ((low >> bb) & 1) ? '1' : '0';
+                header_spaced[l + 8] = '\0';
+                strcat(header_spaced, " ");
+            }
+            l = (int)strlen(header_contig);
+            if (l + 8 < (int)sizeof(header_contig)) {
+                for (bb = 7; bb >= 0; --bb) header_contig[l + (7 - bb)] = ((low >> bb) & 1) ? '1' : '0';
+                header_contig[l + 8] = '\0';
+            }
+        }
+        build_payload_bits_whole(fileData, payload_spaced, (int)sizeof(payload_spaced), payload_contig, (int)sizeof(payload_contig));
+        Data_stuffing_binary(fileData);
+        Network_packets(fileData, packet_size_bits, frame_size_bits);
+        {
+            const char *SYN = "00010110";
+            const char *SOH = "00000001";
+            const char *STX = "00000010";
+            const char *ETX = "00000011";
+            FILE *outf = fopen(outname, "w");
+            if (outf == NULL) {
+                printf("Error opening output file '%s' for writing\n", outname);
+            } else {
+                fprintf(outf, "%s %s %s %s %s %s %s %s\n",
+                    SYN, SYN, SOH,
+                    header_spaced,
+                    STX,
+                    payload_spaced,
+                    ETX,
+                    all_frame_crcs[0] ? all_frame_crcs : "");
+                fclose(outf);
+            }
+        }
+    }
+    return 0;
+}
+int main(void) {
+    return char_sender_cli();
+}
