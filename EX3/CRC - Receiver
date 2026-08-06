@@ -1,0 +1,510 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define MAX_LINE 200000
+#define MAX_TOKENS 20000
+#define MAX_PAYLOAD_CHARS 20000
+static char filecontent[MAX_LINE];
+static char or_data[MAX_PAYLOAD_CHARS];
+static char b_data[MAX_PAYLOAD_CHARS];
+void compute_remainder_from_data(const char *data, const char *poly, char *rem_out) {
+    int len_poly = (int)strlen(poly);
+    int rlen = len_poly - 1;
+    char div[MAX_LINE];
+    char temp[MAX_PAYLOAD_CHARS];
+    int i, j;
+    if (data && data[0]) {
+        strncpy(div, data, sizeof(div) - 1);
+        div[sizeof(div) - 1] = '\0';
+    } else {
+        div[0] = '\0';
+    }
+    for (i = 0; i < rlen; ++i) {
+        if ((int)strlen(div) + 1 < (int)sizeof(div)) strcat(div, "0");
+    }
+    if ((int)strlen(div) < len_poly) {
+        int cur = (int)strlen(div);
+        for (i = cur; i < len_poly && i < (int)sizeof(div) - 1; ++i) div[i] = '0';
+        div[len_poly] = '\0';
+    }
+    strncpy(temp, div, len_poly);
+    temp[len_poly] = '\0';
+
+    {
+        int div_len = (int)strlen(div);
+        for (i = len_poly; i <= div_len; ++i) {
+            if (temp[0] == '1') {
+                for (j = 1; j < len_poly; ++j)
+                    temp[j] = (temp[j] == poly[j]) ? '0' : '1';
+            }
+            for (j = 0; j < len_poly - 1; ++j) temp[j] = temp[j + 1];
+            if (i < div_len) temp[len_poly - 1] = div[i];
+            else temp[len_poly - 1] = '\0';
+        }
+    }
+    if (rlen > 0) {
+        strncpy(rem_out, temp, rlen);
+        rem_out[rlen] = '\0';
+    } else {
+        rem_out[0] = '\0';
+    }
+}
+void compute_remainder_of_codeword(const char *codeword, const char *poly, char *rem_out) {
+    int len_poly = (int)strlen(poly);
+    int i, j;
+    char div[MAX_LINE];
+    char temp[MAX_PAYLOAD_CHARS];
+    strncpy(div, codeword, sizeof(div)-1);
+    div[sizeof(div)-1] = '\0';
+    {
+        int cwlen = (int)strlen(div);
+        if (cwlen < len_poly) {
+            int idx;
+            for (idx = cwlen; idx < len_poly && idx < (int)sizeof(div) - 1; ++idx) div[idx] = '0';
+            div[len_poly] = '\0';
+        }
+    }
+    strncpy(temp, div, len_poly);
+    temp[len_poly] = '\0';
+    {
+        int div_len = (int)strlen(div);
+        for (i = len_poly; i <= div_len; ++i) {
+            if (temp[0] == '1') {
+                for (j = 1; j < len_poly; ++j) temp[j] = (temp[j] == poly[j]) ? '0' : '1';
+            }
+            for (j = 0; j < len_poly - 1; ++j) temp[j] = temp[j + 1];
+            if (i < div_len) temp[len_poly - 1] = div[i];
+            else temp[len_poly - 1] = '\0';
+        }
+    }
+    if (len_poly - 1 > 0) {
+        strncpy(rem_out, temp, len_poly - 1);
+        rem_out[len_poly - 1] = '\0';
+    } else rem_out[0] = '\0';
+}
+int is_codeword_valid(const char *codeword, const char *poly) {
+    char rem[MAX_PAYLOAD_CHARS];
+    compute_remainder_of_codeword(codeword, poly, rem);
+    if (rem[0] == '\0') return 1; /* zero-length remainder */
+    {
+        int i;
+        for (i = 0; rem[i] != '\0'; ++i) if (rem[i] != '0') return 0;
+    }
+    return 1;
+}
+void bits_to_bytes(const char *bits, char *out_chars, int out_sz) {
+    int blen = (int)strlen(bits);
+    int pos = 0;
+    int i, k;
+    char bytebuf[9];
+    bytebuf[8] = '\0';
+    out_chars[0] = '\0';
+    for (i = 0; i + 8 <= blen; i += 8) {
+        for (k = 0; k < 8; ++k) bytebuf[k] = bits[i + k];
+        {
+            unsigned char val = 0;
+            int b;
+            for (b = 0; b < 8; ++b) {
+                val = (unsigned char)(val << 1);
+                if (bytebuf[b] == '1') val |= 1;
+            }
+            if (pos + 1 < out_sz) out_chars[pos++] = (char)val;
+            else break;
+        }
+    }
+    out_chars[pos] = '\0';
+}
+void bytes_to_bitgroups(const char *bytes, char *out_bits, int out_sz) {
+    int i, b, pos = 0;
+    out_bits[0] = '\0';
+    for (i = 0; bytes[i] != '\0'; ++i) {
+        unsigned char ch = (unsigned char)bytes[i];
+        for (b = 7; b >= 0; --b) {
+            if (pos + 1 < out_sz) out_bits[pos++] = ((ch >> b) & 1) ? '1' : '0';
+        }
+        if (pos + 1 < out_sz) out_bits[pos++] = ' ';
+    }
+    if (pos > 0 && out_bits[pos - 1] == ' ') out_bits[pos - 1] = '\0';
+    else out_bits[pos] = '\0';
+}
+void destuff_tokens(const char *stuffed, char *out_destuffed, int out_sz) {
+    char copy[MAX_PAYLOAD_CHARS];
+    char *tok;
+    int first = 1;
+    strncpy(copy, stuffed, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    out_destuffed[0] = '\0';
+    tok = strtok(copy, " ");
+    while (tok != NULL) {
+        if (strcmp(tok, "DLE") == 0) {
+            char *next = strtok(NULL, " ");
+            if (next != NULL && (strcmp(next, "DLE") == 0 || strcmp(next, "ETX") == 0)) {
+                if (!first) { if ((int)strlen(out_destuffed) + 1 < out_sz) strcat(out_destuffed, " "); }
+                if ((int)strlen(out_destuffed) + (int)strlen(next) + 1 < out_sz) strcat(out_destuffed, next);
+                first = 0;
+            } else {
+                if (!first) { if ((int)strlen(out_destuffed) + 1 < out_sz) strcat(out_destuffed, " "); }
+                if ((int)strlen(out_destuffed) + (int)strlen(tok) + 1 < out_sz) strcat(out_destuffed, tok);
+                first = 0;
+                if (next != NULL) {
+                    if (!first) { if ((int)strlen(out_destuffed) + 1 < out_sz) strcat(out_destuffed, " "); }
+                    if ((int)strlen(out_destuffed) + (int)strlen(next) + 1 < out_sz) strcat(out_destuffed, next);
+                    first = 0;
+                }
+            }
+        } else {
+            if (!first) { if ((int)strlen(out_destuffed) + 1 < out_sz) strcat(out_destuffed, " "); }
+            if ((int)strlen(out_destuffed) + (int)strlen(tok) + 1 < out_sz) strcat(out_destuffed, tok);
+            first = 0;
+        }
+        tok = strtok(NULL, " ");
+    }
+}
+int frame_check_cli(void) {
+    char filename[512];
+    char filebuf[MAX_LINE];
+    char copybuf[MAX_LINE];
+    char *tokens[MAX_TOKENS];
+    int token_count = 0;
+    int i;
+    printf("Enter output filename to decode: ");
+    if (scanf("%511s", filename) != 1) return 1;
+    int ch = getchar();
+    while (ch != '\n' && ch != EOF) ch = getchar();
+    {
+        FILE *f = fopen(filename, "r");
+        if (!f) { printf("Cannot open file '%s'\n", filename); return 1; }
+        filebuf[0] = '\0';
+        while (fgets(copybuf, sizeof(copybuf), f) != NULL) {
+            if ((int)(strlen(filebuf) + strlen(copybuf)) < (int)sizeof(filebuf))
+                strcat(filebuf, copybuf);
+        }
+        fclose(f);
+    }
+    {
+        char *tok;
+        strncpy(copybuf, filebuf, sizeof(copybuf) - 1);
+        copybuf[sizeof(copybuf) - 1] = '\0';
+        token_count = 0;
+        tok = strtok(copybuf, " \t\r\n");
+        while (tok != NULL && token_count < MAX_TOKENS) {
+            tokens[token_count] = (char *)malloc(strlen(tok) + 1);
+            if (!tokens[token_count]) break;
+            strcpy(tokens[token_count], tok);
+            ++token_count;
+            tok = strtok(NULL, " \t\r\n");
+        }
+    }
+
+    if (token_count < 7) {
+        printf("File format not as expected (too few tokens).\n");
+        for (i = 0; i < token_count; ++i) free(tokens[i]);
+        return 1;
+    }
+    int stx_idx = -1, etx_idx = -1;
+    for (i = 0; i < token_count; ++i) if (strcmp(tokens[i], "00000010") == 0) { stx_idx = i; break; }
+    if (stx_idx == -1) { printf("STX not found.\n"); for (i=0;i<token_count;i++) free(tokens[i]); return 1; }
+    for (i = stx_idx + 1; i < token_count; ++i) if (strcmp(tokens[i], "00000011") == 0) { etx_idx = i; break; }
+    if (etx_idx == -1) { printf("ETX not found.\n"); for (i=0;i<token_count;i++) free(tokens[i]); return 1; }
+    char payload_bits[MAX_LINE];
+    payload_bits[0] = '\0';
+    for (i = stx_idx + 1; i < etx_idx; ++i) {
+        if ((int)strlen(tokens[i]) == 8) {
+            if ((int)(strlen(payload_bits) + 8) < (int)sizeof(payload_bits)) strcat(payload_bits, tokens[i]);
+        }
+    }
+    int crcs_start = etx_idx + 1;
+    int frames = token_count - crcs_start;
+    if (frames <= 0) {
+        printf("No codeword tokens found after ETX.\n");
+        for (i=0;i<token_count;i++) free(tokens[i]);
+        return 1;
+    }
+    char poly[256];
+    printf("Enter CRC polynomial (bit string, e.g. 10011): ");
+    if (scanf("%255s", poly) != 1) { for (i=0;i<token_count;i++) free(tokens[i]); return 1; }
+    int len_poly = (int)strlen(poly);
+    if (len_poly < 2) { printf("Polynomial too short.\n"); for (i=0;i<token_count;i++) free(tokens[i]); return 1; }
+    int rem_len = len_poly - 1;
+    printf("\n=== Per-frame information ===\n");
+    for (i = 0; i < frames; ++i) {
+        char *cw = tokens[crcs_start + i];
+        printf("\nFrame %d:\n", i + 1);
+        if (cw == NULL) { printf("  Missing codeword token\n"); continue; }
+        int cwlen = (int)strlen(cw);
+        if (cwlen < rem_len) {
+            printf("  (codeword shorter than remainder length)\n");
+            continue;
+        }
+        int payload_bits_len = cwlen - rem_len;
+        char frame_payload_bits[MAX_LINE];
+        if (payload_bits_len > 0) {
+            if (payload_bits_len >= (int)sizeof(frame_payload_bits)) payload_bits_len = (int)sizeof(frame_payload_bits) - 1;
+            strncpy(frame_payload_bits, cw, payload_bits_len);
+            frame_payload_bits[payload_bits_len] = '\0';
+        } else frame_payload_bits[0] = '\0';
+        char stuffed_chars[MAX_PAYLOAD_CHARS];
+        stuffed_chars[0] = '\0';
+        if (frame_payload_bits[0] != '\0') bits_to_bytes(frame_payload_bits, stuffed_chars, sizeof(stuffed_chars));
+        char tmp_tokens[MAX_PAYLOAD_CHARS];
+        tmp_tokens[0] = '\0';
+        if (stuffed_chars[0] != '\0') {
+            int ci;
+            char tokenbuf[512];
+            tokenbuf[0] = '\0';
+            int firsttok = 1;
+            for (ci = 0; stuffed_chars[ci] != '\0'; ++ci) {
+                char c = stuffed_chars[ci];
+                if (c == ' ') {
+                    if (tokenbuf[0] != '\0') {
+                        if (!firsttok) strcat(tmp_tokens, " ");
+                        strcat(tmp_tokens, tokenbuf);
+                        tokenbuf[0] = '\0';
+                        firsttok = 0;
+                    }
+                } else {
+                    int tl = (int)strlen(tokenbuf);
+                    if (tl + 2 < (int)sizeof(tokenbuf)) { tokenbuf[tl] = c; tokenbuf[tl + 1] = '\0'; }
+                }
+            }
+            if (tokenbuf[0] != '\0') {
+                if (!firsttok) strcat(tmp_tokens, " ");
+                strcat(tmp_tokens, tokenbuf);
+            }
+        }
+        char destuffed[MAX_PAYLOAD_CHARS];
+        destuffed[0] = '\0';
+        if (tmp_tokens[0] != '\0') destuff_tokens(tmp_tokens, destuffed, sizeof(destuffed));
+        printf("  Message (destuffed tokens): %s\n", destuffed[0] ? destuffed : "(empty)");
+        {
+            char bitgroups[MAX_PAYLOAD_CHARS];
+            bitgroups[0] = '\0';
+            bytes_to_bitgroups(stuffed_chars, bitgroups, sizeof(bitgroups));
+            printf("  Binary (char-wise): %s\n", bitgroups[0] ? bitgroups : "(none)");
+        }
+        printf("  Codeword (binary): %s\n", cw);
+        if (is_codeword_valid(cw, poly)) printf("  CRC check : OK \n");
+        else printf("  CRC check (codeword division): ERROR\n");
+    }
+    int sel_frame;
+    printf("\nEnter frame number to modify (1 .. %d), 0 to exit: ", frames);
+    if (scanf("%d", &sel_frame) != 1) sel_frame = 0;
+    if (sel_frame <= 0 || sel_frame > frames) {
+        printf("No modification. Exiting.\n");
+        for (i=0;i<token_count;i++) free(tokens[i]);
+        return 0;
+    }
+    {
+        char *cw = tokens[crcs_start + (sel_frame - 1)];
+        int cwlen = (int)strlen(cw);
+        int payload_bits_len = cwlen - rem_len;
+        if (payload_bits_len < 0) payload_bits_len = 0;
+        char payload_bits[MAX_LINE];
+        if (payload_bits_len > 0) {
+            strncpy(payload_bits, cw, payload_bits_len);
+            payload_bits[payload_bits_len] = '\0';
+        } else payload_bits[0] = '\0';
+        printf("Selected Frame %d has %d payload bits.\n", sel_frame, payload_bits_len);
+        if (payload_bits_len == 0) {
+            printf("No payload bits to flip. Exiting.\n");
+            for (i=0;i<token_count;i++) free(tokens[i]);
+            return 0;
+        }
+        int bit_to_flip;
+        printf("Enter bit index to flip inside this frame (1 .. %d): ", payload_bits_len);
+        if (scanf("%d", &bit_to_flip) != 1) bit_to_flip = 1;
+        if (bit_to_flip < 1) bit_to_flip = 1;
+        if (bit_to_flip > payload_bits_len) bit_to_flip = payload_bits_len;
+        int pos = bit_to_flip - 1;
+        printf("Original bit at %d: %c\n", bit_to_flip, payload_bits[pos]);
+        payload_bits[pos] = (payload_bits[pos] == '0') ? '1' : '0';
+        printf("After flip bit at %d: %c\n", bit_to_flip, payload_bits[pos]);
+        char tx_rem[512];
+        if (rem_len > 0) {
+            strncpy(tx_rem, cw + (cwlen - rem_len), rem_len);
+            tx_rem[rem_len] = '\0';
+        } else tx_rem[0] = '\0';
+        char modified_cw[MAX_LINE];
+        modified_cw[0] = '\0';
+        strncat(modified_cw, payload_bits, sizeof(modified_cw)-1);
+        strncat(modified_cw, tx_rem, sizeof(modified_cw)-1);
+        char mod_rem_of_cw[512];
+        compute_remainder_of_codeword(modified_cw, poly, mod_rem_of_cw);
+        printf("\nModified frame results:\n");
+        printf("  Modified payload bits: %s\n", payload_bits[0] ? payload_bits : "(none)");
+        printf("  Modified codeword : %s\n", modified_cw);
+        {
+            int allzero = 1;
+            int k;
+            for (k = 0; mod_rem_of_cw[k] != '\0'; ++k) if (mod_rem_of_cw[k] != '0') { allzero = 0; break; }
+            if (allzero) printf("  CRC check after modification: OK \n");
+            else printf("  CRC check after modification: ERROR \n");
+        }
+        {
+            char modified_stuffed[MAX_PAYLOAD_CHARS];
+            modified_stuffed[0] = '\0';
+            bits_to_bytes(payload_bits, modified_stuffed, sizeof(modified_stuffed));
+            char tmp_tokens[MAX_PAYLOAD_CHARS];
+            tmp_tokens[0] = '\0';
+            {
+                int ci;
+                char tokenbuf[512];
+                tokenbuf[0] = '\0';
+                int firsttok = 1;
+                for (ci = 0; modified_stuffed[ci] != '\0'; ++ci) {
+                    char c = modified_stuffed[ci];
+                    if (c == ' ') {
+                        if (tokenbuf[0] != '\0') {
+                            if (!firsttok) strcat(tmp_tokens, " ");
+                            strcat(tmp_tokens, tokenbuf);
+                            tokenbuf[0] = '\0';
+                            firsttok = 0;
+                        }
+                    } else {
+                        int tl = (int)strlen(tokenbuf);
+                        if (tl + 2 < (int)sizeof(tokenbuf)) { tokenbuf[tl] = c; tokenbuf[tl + 1] = '\0'; }
+                    }
+                }
+                if (tokenbuf[0] != '\0') {
+                    if (!firsttok) strcat(tmp_tokens, " ");
+                    strcat(tmp_tokens, tokenbuf);
+                }
+            }
+            char destuffed_modified[MAX_PAYLOAD_CHARS];
+            destuffed_modified[0] = '\0';
+            if (tmp_tokens[0] != '\0') destuff_tokens(tmp_tokens, destuffed_modified, sizeof(destuffed_modified));
+            printf("  Modified message (destuffed tokens): %s\n", destuffed_modified[0] ? destuffed_modified : "(empty)");
+            {
+                char bits_view[MAX_PAYLOAD_CHARS];
+                bits_view[0] = '\0';
+                bytes_to_bitgroups(modified_stuffed, bits_view, sizeof(bits_view));
+                printf("  Modified binary (char-wise): %s\n", bits_view[0] ? bits_view : "(none)");
+            }
+        }
+    }
+    for (i = 0; i < token_count; ++i) free(tokens[i]);
+    return 0;
+}
+int main(void) {
+    return frame_check_cli();
+}
+void file_opening(void) {
+    FILE *inputFile = fopen("stuffed_output.txt", "r");
+    if (inputFile == NULL) {
+        printf("Error opening file 'stuffed_output.txt' for reading!\n");
+        filecontent[0] = '\0';
+        return;
+    }
+    char lines[512];
+    filecontent[0] = '\0';
+    while (fgets(lines, sizeof(lines), inputFile) != NULL) {
+        if ((int)(strlen(filecontent) + strlen(lines)) < (int)sizeof(filecontent))
+            strcat(filecontent, lines);
+    }
+    fclose(inputFile);
+}
+int binary_char(const char input[]) {
+    if (!input) return -1;
+    int i = 0, result = 0;
+    for (i = 0; i < 8; i++) {
+        if (input[i] != '0' && input[i] != '1') return -1;
+        result = (result << 1) + (input[i] - '0');
+    }
+    return result;
+}
+void Data_unstuffing(void) {
+    const char sample[] = " ";
+    char *sub;
+    int skip_dle = 0;
+    char word[512];
+    char bword[2048];
+    or_data[0] = '\0';
+    b_data[0] = '\0';
+    strncpy(word, "", sizeof(word));
+    bword[0] = '\0';
+    char copy[MAX_LINE];
+    strncpy(copy, filecontent, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    sub = strtok(copy, sample);
+    while (sub != NULL) {
+        int val = binary_char(sub);
+        char content = (val >= 0) ? (char)val : '?';
+        int wlen = (int)strlen(word);
+        if (content == ' ') {
+            if (wlen > 0) {
+                if (strcmp(word, "DLE") == 0) {
+                    if (skip_dle == 1) {
+                        if (strlen(or_data) + strlen(word) + 2 < sizeof(or_data)) {
+                            strcat(or_data, word);
+                            strcat(or_data, " ");
+                        }
+                        if (strlen(b_data) + strlen(bword) + 2 < sizeof(b_data)) {
+                            strcat(b_data, bword);
+                            strcat(b_data, " ");
+                        }
+                        skip_dle = 0;
+                    } else {
+                        skip_dle = 1;
+                    }
+                } else {
+                    if (strlen(or_data) + strlen(word) + 2 < sizeof(or_data)) {
+                        strcat(or_data, word);
+                        strcat(or_data, " ");
+                    }
+                    if (strlen(b_data) + strlen(bword) + 2 < sizeof(b_data)) {
+                        strcat(b_data, bword);
+                        strcat(b_data, " ");
+                    }
+                    skip_dle = 0;
+                }
+            }
+            word[0] = '\0';
+            bword[0] = '\0';
+        } else {
+            int cur = (int)strlen(word);
+            if (cur + 2 < (int)sizeof(word)) {
+                word[cur] = content;
+                word[cur + 1] = '\0';
+            }
+            int lb = (int)strlen(bword);
+            if (lb + (int)strlen(sub) + 2 < (int)sizeof(bword)) {
+                if (lb > 0) strcat(bword, " ");
+                strcat(bword, sub);
+            }
+        }
+        sub = strtok(NULL, sample);
+    }
+    if (strlen(word) > 0) {
+        if (strcmp(word, "DLE") == 0) {
+            if (skip_dle == 1) {
+                if (strlen(or_data) + strlen(word) + 2 < sizeof(or_data)) {
+                    strcat(or_data, word);
+                    strcat(or_data, " ");
+                }
+                if (strlen(b_data) + strlen(bword) + 2 < sizeof(b_data)) {
+                    strcat(b_data, bword);
+                    strcat(b_data, " ");
+                }
+            }
+        } else {
+            if (strlen(or_data) + strlen(word) + 2 < sizeof(or_data)) {
+                strcat(or_data, word);
+                strcat(or_data, " ");
+            }
+            if (strlen(b_data) + strlen(bword) + 2 < sizeof(b_data)) {
+                strcat(b_data, bword);
+                strcat(b_data, " ");
+            }
+        }
+    }
+}
+void Data_unstuffing_binary(void) {
+    file_opening();
+    Data_unstuffing();
+    printf("%s\n", b_data[0] ? b_data : "(no binary tokens)");
+}
+void Data_unstuffing_char(void) {
+    file_opening();
+    Data_unstuffing();
+    printf("%s\n", or_data[0] ? or_data : "(no destuffed text)");
+}
