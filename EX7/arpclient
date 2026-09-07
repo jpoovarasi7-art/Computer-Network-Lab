@@ -1,0 +1,124 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define BUFFER_SIZE 100
+int sockfd;
+int port;
+int bytes;
+char ip_address[BUFFER_SIZE];
+char mac_address[BUFFER_SIZE];
+struct sockaddr_in server_addr;
+void create_socket();
+void setup_server_address(char ip[]);
+void connect_server();
+void get_ip();
+void check_local_cache();
+void send_request();
+void receive_reply();
+void close_client();
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    create_socket();
+    setup_server_address(argv[1]);
+    connect_server();
+    get_ip();
+    check_local_cache();
+    close_client();
+    return 0;
+}
+void create_socket()
+{
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0)
+    {
+        perror("Socket failed");
+        exit(1);
+    }
+}
+void setup_server_address(char ip[])
+{
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    inet_pton(AF_INET, ip, &server_addr.sin_addr);
+}
+void connect_server()
+{
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("Connection failed");
+        exit(1);
+    }
+    printf("Connected to ARP Server.\n");
+}
+void get_ip()
+{
+    printf("\nEnter IP Address to resolve: ");
+    scanf("%99s", ip_address);
+}
+void check_local_cache()
+{
+    char command[BUFFER_SIZE * 2];
+    char buffer[BUFFER_SIZE * 2];
+    FILE *fp;
+    sprintf(command, "ip neigh show %s", ip_address);
+    fp = popen(command, "r");
+    if (fp == NULL)
+    {
+        printf("Unable to check OS local cache. Querying ARP Server...\n");
+        send_request();
+        receive_reply();
+        return;
+    }
+    if (fgets(buffer, sizeof(buffer), fp) != NULL)
+    {
+        if (strstr(buffer, "lladdr") != NULL)
+        {
+            sscanf(buffer, "%*s %*s %*s %*s %99s", mac_address);
+            printf("\n[SUCCESS] IP found in Linux OS Cache.\n");
+            printf("IP Address  : %s\n", ip_address);
+            printf("MAC Address : %s\n", mac_address);
+            pclose(fp);
+            return;
+        }
+    }
+    pclose(fp);
+    printf("\nIP not found in Linux OS Cache.\n");
+    send_request();
+    receive_reply();
+}
+void send_request()
+{
+    send(sockfd, ip_address, strlen(ip_address), 0);
+}
+void receive_reply()
+{
+    bytes = recv(sockfd, mac_address, sizeof(mac_address) - 1, 0);
+    if (bytes <= 0)
+    {
+        printf("Server disconnected.\n");
+        return;
+    }
+    mac_address[bytes] = '\0';
+    if (strcmp(mac_address, "NOT_FOUND") == 0)
+    {
+        printf("\nIP Address not found on server database.\n");
+        return;
+    }
+    printf("\nARP Reply received from remote server.\n");
+    printf("IP Address  : %s\n", ip_address);
+    printf("MAC Address : %s\n", mac_address);
+}
+void close_client()
+{
+    close(sockfd);
+    printf("\nClient connection closed.\n");
+}
