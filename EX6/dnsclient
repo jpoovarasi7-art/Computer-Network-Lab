@@ -1,0 +1,107 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define BUFFER_SIZE 1024
+int create_socket();
+void setup_server(struct sockaddr_in *server_addr,char ip[],int port);
+void run_dns_client(int sockfd,struct sockaddr_in *server_addr);
+void send_message(int sockfd,struct sockaddr_in *server_addr,char message[]);
+void receive_message(int sockfd,struct sockaddr_in *server_addr,char message[]);
+void close_client(int sockfd);
+int main(int argc, char *argv[])
+{
+    int sockfd;
+    int port;
+    struct sockaddr_in server_addr;
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        printf("Example: %s 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    printf("\n");
+    printf("============================================\n");
+    printf("              DNS UDP CLIENT\n");
+    printf("============================================\n");
+    printf("Server IP   : %s\n", argv[1]);
+    printf("Server Port : %d\n", port);
+    sockfd =create_socket();
+    setup_server(&server_addr,argv[1],port);
+    run_dns_client(sockfd,&server_addr);
+    close_client(sockfd);
+    return 0;
+}
+int create_socket()
+{
+    int sockfd;
+    sockfd =socket(AF_INET,SOCK_DGRAM,0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+    return sockfd;
+}
+void setup_server(struct sockaddr_in *server_addr,char ip[],int port)
+{
+    int result;
+    memset(server_addr,0,sizeof(struct sockaddr_in));
+    server_addr->sin_family =AF_INET;
+    server_addr->sin_port =htons(port);
+    result =inet_pton(AF_INET,ip,&server_addr->sin_addr);
+    if (result <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        exit(1);
+    }
+}
+void run_dns_client(int sockfd,
+                    struct sockaddr_in *server_addr)
+{
+    char url[BUFFER_SIZE];
+    char response[BUFFER_SIZE];
+    printf("\nEnter URL: ");
+    fgets(url,BUFFER_SIZE,stdin);
+    url[strcspn(url,"\n")] = '\0';
+    printf("\n");
+    printf("CLIENT -> SERVER\n");
+    printf("URL : %s\n",url);
+    send_message(sockfd,server_addr,url);
+    receive_message(sockfd,server_addr,response);
+    printf("\n");
+    printf("SERVER -> CLIENT\n");
+    printf("%s\n",response);
+    printf("\n============================================\n");
+    printf("             DNS LOOKUP COMPLETE\n");
+    printf("============================================\n");
+}
+void send_message(int sockfd,struct sockaddr_in *server_addr,char message[])
+{
+    int bytes_sent;
+    bytes_sent =sendto(sockfd,message,strlen(message),0,(struct sockaddr *)server_addr,sizeof(struct sockaddr_in));
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+    }
+}
+void receive_message(int sockfd,struct sockaddr_in *server_addr,char message[])
+{
+    int bytes_received;
+    socklen_t addr_len;
+    addr_len =sizeof(struct sockaddr_in);
+    bytes_received =recvfrom(sockfd,message,BUFFER_SIZE - 1,0,(struct sockaddr *)server_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    message[bytes_received] ='\0';
+}
+void close_client(int sockfd)
+{
+    close(sockfd);
+    printf("\nClient terminated.\n");
+}
