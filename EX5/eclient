@@ -1,0 +1,183 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define MAX 100
+
+int create_socket();
+void connect_server(int sock, char ip[], int port);
+void send_array(int sock);
+void receive_array(int sock);
+void close_client(int sock);
+
+int main(int argc, char *argv[])
+{
+    int sock;
+    int port;
+    int choice;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP_address> <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[2]);
+
+    sock = create_socket();
+
+    connect_server(sock, argv[1], port);
+
+    while (1)
+    {
+        printf("\n=====================================\n");
+        printf("             ECHO CLIENT\n");
+        printf("=====================================\n");
+        printf("1. Give Array\n");
+        printf("2. Exit\n");
+        printf("Enter your choice: ");
+        scanf("%d", &choice);
+
+        if (choice == 1)
+        {
+            send_array(sock);
+            receive_array(sock);
+        }
+        else if (choice == 2)
+        {
+            printf("\nClient terminating...\n");
+            break;
+        }
+        else
+        {
+            printf("\nInvalid choice.\n");
+        }
+    }
+
+    close_client(sock);
+
+    return 0;
+}
+
+int create_socket()
+{
+    int sock;
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sock < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return sock;
+}
+
+void connect_server(int sock, char ip[], int port)
+{
+    struct sockaddr_in serverAddr;
+
+    memset(&serverAddr, 0, sizeof(serverAddr));
+
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, ip, &serverAddr.sin_addr) <= 0)
+    {
+        printf("Invalid IP address.\n");
+        close(sock);
+        exit(1);
+    }
+
+    if (connect(sock,
+                (struct sockaddr *)&serverAddr,
+                sizeof(serverAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(sock);
+        exit(1);
+    }
+
+    printf("\nConnected to server successfully.\n");
+}
+
+void send_array(int sock)
+{
+    int size;
+    int array[MAX];
+    int i;
+
+    printf("\nEnter array size: ");
+    scanf("%d", &size);
+
+    if (size <= 0 || size > MAX)
+    {
+        printf("Invalid array size.\n");
+        return;
+    }
+
+    printf("Enter %d elements:\n", size);
+
+    for (i = 0; i < size; i++)
+    {
+        scanf("%d", &array[i]);
+    }
+
+    send(sock, &size, sizeof(size), 0);
+    send(sock, array, size * sizeof(int), 0);
+
+    printf("Array sent: ");
+
+    for (i = 0; i < size; i++)
+    {
+        printf("%d ", array[i]);
+    }
+
+    printf("\n");
+}
+
+void receive_array(int sock)
+{
+    int size;
+    int array[MAX];
+    int bytes;
+    int i;
+
+    bytes = recv(sock, &size, sizeof(size), 0);
+
+    if (bytes <= 0)
+    {
+        printf("Server disconnected.\n");
+        exit(1);
+    }
+
+    bytes = recv(sock, array, size * sizeof(int), 0);
+
+    if (bytes <= 0)
+    {
+        printf("Server disconnected.\n");
+        exit(1);
+    }
+
+    printf("Echo received: ");
+
+    for (i = 0; i < size; i++)
+    {
+        printf("%d ", array[i]);
+    }
+
+    printf("\n");
+}
+
+void close_client(int sock)
+{
+    close(sock);
+
+    printf("-------------------------------------\n");
+    printf("Client connection closed.\n");
+    printf("Server is still running.\n");
+}
