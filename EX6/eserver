@@ -1,0 +1,141 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define MAX 100
+int sockfd;
+int port;
+int n;
+int array[MAX];
+struct sockaddr_in server_addr;
+struct sockaddr_in client_addr;
+socklen_t addr_len;
+void create_socket();
+void setup_server(char ip[], int port);
+void run_server();
+void receive_array();
+void send_array();
+void close_server();
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        printf("Example: %s 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    create_socket();
+    setup_server(argv[1], port);
+    run_server();
+    close_server();
+    return 0;
+}
+void create_socket()
+{
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+void setup_server(char ip[], int port)
+{
+    int result;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    if (strcmp(ip, "0.0.0.0") == 0)
+    {
+        server_addr.sin_addr.s_addr = INADDR_ANY;
+    }
+    else
+    {
+        result = inet_pton(AF_INET,ip,&server_addr.sin_addr);
+        if (result <= 0)
+        {
+            printf("Invalid IP address.\n");
+            close(sockfd);
+            exit(1);
+        }
+    }
+    result = bind(sockfd,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (result < 0)
+    {
+        perror("Bind failed");
+        close(sockfd);
+        exit(1);
+    }
+    printf("\n========================================\n");
+    printf("          UDP ECHO SERVER\n");
+    printf("========================================\n");
+    printf("Type : iterative\n");
+    printf("IP   : %s\n", ip);
+    printf("Port : %d\n", port);
+    printf("Server is waiting for clients...\n");
+}
+void run_server()
+{
+    while (1)
+    {
+        receive_array();
+        send_array();
+    }
+}
+void receive_array()
+{
+    int bytes_received;
+    addr_len = sizeof(client_addr);
+    bytes_received =recvfrom(sockfd,&n,sizeof(n),0,(struct sockaddr *)&client_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    if (n <= 0 || n > MAX)
+    {
+        printf("Invalid array size received.\n");
+        return;
+    }
+    bytes_received =recvfrom(sockfd,array,n * sizeof(int),0,(struct sockaddr *)&client_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    printf("\n----------------------------------------\n");
+    printf("Client connected.\n");
+    printf("Client IP   : %s\n",inet_ntoa(client_addr.sin_addr));
+    printf("Client Port : %d\n",ntohs(client_addr.sin_port));
+    printf("Received Array: ");
+    int i;
+    for (i = 0; i < n; i++)
+    {
+        printf("%d ", array[i]);
+    }
+    printf("\n");
+}
+void send_array()
+{
+    int bytes_sent;
+    bytes_sent =sendto(sockfd,&n,sizeof(n),0,(struct sockaddr *)&client_addr,addr_len);
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+        return;
+    }
+    bytes_sent =sendto(sockfd,array,n * sizeof(int),0,(struct sockaddr *)&client_addr,addr_len);
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+        return;
+    }
+    printf("Echoed array back to client.\n");
+}
+void close_server()
+{
+    close(sockfd);
+    printf("\nServer terminated.\n");
+}
