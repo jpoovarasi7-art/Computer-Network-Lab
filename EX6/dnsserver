@@ -1,0 +1,176 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define MAX_URL 100
+#define MAX_IP 50
+#define BUFFER_SIZE 1024
+#define MAX_RECORDS 10
+typedef struct
+{
+    char url[MAX_URL];
+    char ip[MAX_IP];
+} DNSRecord;
+DNSRecord dns_table[MAX_RECORDS] =
+{
+    {"www.google.com", "142.250.183.196"},
+    {"www.youtube.com", "142.250.72.14"},
+    {"www.facebook.com", "157.240.241.35"},
+    {"www.amazon.com", "205.251.242.103"},
+    {"www.github.com", "140.82.112.4"},
+    {"www.yahoo.com", "98.137.11.163"},
+    {"www.microsoft.com", "20.236.44.162"},
+    {"www.apple.com", "17.253.144.10"},
+    {"www.wikipedia.org", "208.80.154.224"},
+    {"www.linkedin.com", "108.174.10.10"}
+};
+int create_socket();
+void bind_server(int sockfd,int port);
+void display_dns_table();
+void run_dns_server(int sockfd);
+void receive_message(int sockfd,char message[],struct sockaddr_in *client_addr,socklen_t *addr_len);
+void process_dns_request(int sockfd,char message[],struct sockaddr_in *client_addr,socklen_t addr_len);
+int search_url(char url[],char ip[]);
+void send_message(int sockfd,struct sockaddr_in *client_addr,socklen_t addr_len,char message[]);
+int main(int argc, char *argv[])
+{
+    int sockfd;
+    int port;
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        printf("Example: %s 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    printf("\n");
+    printf("============================================\n");
+    printf("              DNS UDP SERVER\n");
+    printf("============================================\n");
+    printf("IP   : %s\n", argv[1]);
+    printf("Port : %d\n", port);
+    display_dns_table();
+    sockfd = create_socket();
+    bind_server(sockfd,port);
+    printf("\n============================================\n");
+    printf("             DNS SERVER READY\n");
+    printf("============================================\n");
+    printf("Waiting for DNS requests...\n");
+    run_dns_server(sockfd);
+    return 0;
+}
+int create_socket()
+{
+    int sockfd;
+    sockfd = socket(AF_INET,SOCK_DGRAM,0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+    return sockfd;
+}
+void bind_server(int sockfd,int port)
+{
+    struct sockaddr_in server_addr;
+    int result;
+    memset(&server_addr,0,sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port =htons(port);
+    server_addr.sin_addr.s_addr =INADDR_ANY;
+    result = bind(sockfd,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (result < 0)
+    {
+        perror("Bind failed");
+        close(sockfd);
+        exit(1);
+    }
+}
+void display_dns_table()
+{
+    int i;
+    printf("\n");
+    printf("*********************************************\n");
+    printf("              DNS TABLE\n");
+    printf("********************************************\n");
+    printf("%-25s %-20s\n","URL","IP ADDRESS");
+    printf("--------------------------------------------\n");
+    for (i = 0; i < MAX_RECORDS; i++)
+    {
+        printf("%-25s %-20s\n",
+               dns_table[i].url,
+               dns_table[i].ip);
+    }
+    printf("============================================\n");
+}
+void run_dns_server(int sockfd)
+{
+    struct sockaddr_in client_addr;
+    socklen_t addr_len;
+    char message[BUFFER_SIZE];
+    while (1)
+    {
+        addr_len =sizeof(client_addr);
+        receive_message(sockfd,message,&client_addr,&addr_len);
+        process_dns_request(sockfd,message,&client_addr,addr_len);
+    }
+}
+void receive_message(int sockfd,char message[],struct sockaddr_in *client_addr,socklen_t *addr_len)
+{
+    int bytes_received;
+    bytes_received =
+        recvfrom(sockfd,message,BUFFER_SIZE - 1,0,(struct sockaddr *)client_addr,addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    message[bytes_received] ='\0';
+}
+void process_dns_request(int sockfd,char message[],struct sockaddr_in *client_addr,socklen_t addr_len)
+{
+    char ip[MAX_IP];
+    char response[BUFFER_SIZE];
+    int found;
+    printf("\n--------------------------------------------\n");
+    printf("DNS REQUEST RECEIVED\n");
+    printf("URL : %s\n", message);
+    printf("--------------------------------------------\n");
+    found =search_url(message,ip);
+    if (found == 1)
+    {
+        sprintf(response,"IP Address: %s",ip);
+        printf("URL FOUND\n");
+        printf("IP : %s\n",ip);
+    }
+    else
+    {
+        strcpy(response,"URL NOT FOUND");
+        printf("URL NOT FOUND\n");
+    }
+    send_message(sockfd,client_addr,addr_len,response);
+    printf("Response sent to client.\n");
+}
+int search_url(char url[],char ip[])
+{
+    int i;
+    for (i = 0; i < MAX_RECORDS; i++)
+    {
+        if (strcmp(url,dns_table[i].url) == 0)
+        {
+            strcpy(ip,dns_table[i].ip);
+            return 1;
+        }
+    }
+    return 0;
+}
+void send_message(int sockfd,struct sockaddr_in *client_addr,socklen_t addr_len,char message[])
+{
+    int bytes_sent;
+    bytes_sent =sendto(sockfd,message,strlen(message),0,(struct sockaddr *)client_addr,addr_len);
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+    }
+}
