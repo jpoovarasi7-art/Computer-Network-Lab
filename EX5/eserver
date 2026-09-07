@@ -1,0 +1,203 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define MAX 100
+#define WAIT_SIZE 5
+
+int create_socket();
+void bind_socket(int serverSocket, int port);
+void listen_socket(int serverSocket);
+int accept_connection(int serverSocket);
+void receive_and_echo(int clientSocket);
+void close_client(int clientSocket);
+
+int main(int argc, char *argv[])
+{
+    int serverSocket;
+    int clientSocket;
+    int port;
+
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    serverSocket = create_socket();
+
+    bind_socket(serverSocket, port);
+
+    listen_socket(serverSocket);
+
+    while (1)
+    {
+        clientSocket = accept_connection(serverSocket);
+
+        if (clientSocket < 0)
+        {
+            continue;
+        }
+
+        receive_and_echo(clientSocket);
+
+        close_client(clientSocket);
+
+        printf("-------------------------------------\n");
+        printf("Client disconnected.\n");
+        printf("Waiting for next client...\n");
+    }
+
+    return 0;
+}
+
+int create_socket()
+{
+    int serverSocket;
+
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (serverSocket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return serverSocket;
+}
+
+void bind_socket(int serverSocket, int port)
+{
+    struct sockaddr_in serverAddress;
+
+    memset(&serverAddress, 0, sizeof(serverAddress));
+
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    serverAddress.sin_port = htons(port);
+
+    if (bind(serverSocket,
+             (struct sockaddr *)&serverAddress,
+             sizeof(serverAddress)) < 0)
+    {
+        perror("Bind failed");
+        close(serverSocket);
+        exit(1);
+    }
+}
+
+void listen_socket(int serverSocket)
+{
+    if (listen(serverSocket, WAIT_SIZE) < 0)
+    {
+        perror("Listen failed");
+        close(serverSocket);
+        exit(1);
+    }
+
+    printf("\n=====================================\n");
+    printf("          TCP ECHO SERVER\n");
+    printf("=====================================\n");
+    printf("Server is READY\n");
+    printf("Press Ctrl+C to stop the server.\n");
+    printf("Waiting for client...\n");
+}
+
+int accept_connection(int serverSocket)
+{
+    int clientSocket;
+    struct sockaddr_in clientAddress;
+    socklen_t addressLength;
+
+    addressLength = sizeof(clientAddress);
+
+    clientSocket = accept(serverSocket,
+                          (struct sockaddr *)&clientAddress,
+                          &addressLength);
+
+    if (clientSocket < 0)
+    {
+        perror("Accept failed");
+        return -1;
+    }
+
+    printf("-------------------------------------\n");
+    printf("Client CONNECTED\n");
+
+    return clientSocket;
+}
+
+void receive_and_echo(int clientSocket)
+{
+    int size;
+    int array[MAX];
+    int bytes;
+    int i;
+
+    while (1)
+    {
+        bytes = recv(clientSocket,
+                     &size,
+                     sizeof(size),
+                     0);
+
+        if (bytes <= 0)
+        {
+            break;
+        }
+
+        if (size <= 0 || size > MAX)
+        {
+            printf("Invalid array size received.\n");
+            break;
+        }
+
+        bytes = recv(clientSocket,
+                     array,
+                     size * sizeof(int),
+                     0);
+
+        if (bytes <= 0)
+        {
+            break;
+        }
+
+        printf("\nArray received : ");
+
+        for (i = 0; i < size; i++)
+        {
+            printf("%d ", array[i]);
+        }
+
+        printf("\n");
+
+        send(clientSocket,
+             &size,
+             sizeof(size),
+             0);
+
+        send(clientSocket,
+             array,
+             size * sizeof(int),
+             0);
+
+        printf("Echo sent      : ");
+
+        for (i = 0; i < size; i++)
+        {
+            printf("%d ", array[i]);
+        }
+
+        printf("\n");
+    }
+}
+
+void close_client(int clientSocket)
+{
+    close(clientSocket);
+}
