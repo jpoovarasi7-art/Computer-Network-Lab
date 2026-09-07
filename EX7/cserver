@@ -1,0 +1,111 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/signal.h>
+#include <sys/wait.h>
+
+#define BUFFER_SIZE 1024
+
+void handle_zombie(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
+void handle_client(int client_socket, struct sockaddr_in client_address) {
+    char buffer[BUFFER_SIZE] = {0};
+    char reply[BUFFER_SIZE] = {0};
+    char client_ip[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
+    int client_port = ntohs(client_address.sin_port);
+
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
+        int valread = read(client_socket, buffer, BUFFER_SIZE);
+
+        if (valread <= 0 || strncmp(buffer, "exit", 4) == 0) {
+            printf("[[%s:%d]] Client disconnected.\n", client_ip, client_port);
+            break;
+        }
+
+        printf("[[%s:%d]]: %s", client_ip, client_port, buffer);
+
+        snprintf(reply, BUFFER_SIZE, "Echo: %s", buffer);
+        send(client_socket, reply, strlen(reply), 0);
+    }
+
+    close(client_socket);
+    exit(0);
+}
+
+int main(int argc, char *argv[]) {
+    // Validate command line inputs
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <IP_Address> <Port>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    char *ip_address = argv[1];
+    int port = atoi(argv[2]);
+
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    signal(SIGCHLD, handle_zombie);
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("Socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+
+    // Convert text IP from argument to binary form
+    if (inet_pton(AF_INET, ip_address, &address.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid local IP address format\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 10) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Concurrent Server listening on %s:%d...\n", ip_address, port);
+
+    while (1) {
+        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        if (new_socket < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("New client connected successfully!\n");
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(server_fd);
+            handle_client(new_socket, address);
+        } else if (pid > 0) {
+            close(new_socket);
+        } else {
+            perror("Fork failed");
+            close(new_socket);
+        }
+    }
+
+    close(server_fd);
+    return 0;
+}
