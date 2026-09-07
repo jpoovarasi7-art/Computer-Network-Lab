@@ -1,0 +1,149 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define MAX 100
+int sockfd;
+int port;
+int choice;
+int n;
+int array[MAX];
+struct sockaddr_in server_addr;
+socklen_t addr_len;
+void create_socket();
+void setup_server(char ip[], int port);
+void show_menu();
+void process_client();
+void send_array();
+void receive_array();
+void close_client();
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        printf("Example: %s 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    create_socket();
+    setup_server(argv[1], port);
+    process_client();
+    close_client();
+    return 0;
+}
+void create_socket()
+{
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+void setup_server(char ip[], int port)
+{
+    int result;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    result =inet_pton(AF_INET,ip,&server_addr.sin_addr);
+    if (result <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(sockfd);
+        exit(1);
+    }
+    printf("\nConnected to UDP Echo Server.\n");
+}
+void show_menu()
+{
+    printf("\n========================================\n");
+    printf("             UDP ECHO CLIENT\n");
+    printf("========================================\n");
+    printf("1. Send Array\n");
+    printf("2. Exit\n");
+    printf("========================================\n");
+}
+void process_client()
+{
+    while (1)
+    {
+        show_menu();
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+        if (choice == 1)
+        {
+            send_array();
+            receive_array();
+        }
+        else if (choice == 2)
+        {
+            printf("\nClient terminated.\n");
+            break;
+        }
+        else
+        {
+            printf("\nInvalid choice.\n");
+        }
+    }
+}
+void send_array()
+{
+    int bytes_sent;
+    int i;
+    printf("\nEnter array size: ");
+    scanf("%d", &n);
+    if (n <= 0 || n > MAX)
+    {
+        printf("Invalid array size. Maximum size is %d.\n",MAX);
+        return;
+    }
+    printf("Enter %d array elements:\n", n);
+    for (i = 0; i < n; i++)
+    {
+        scanf("%d", &array[i]);
+    }
+    bytes_sent = sendto(sockfd,&n,sizeof(n),0,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+        return;
+    }
+    bytes_sent =sendto(sockfd,array,n * sizeof(int),0,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+        return;
+    }
+    printf("\nArray sent to server.\n");
+}
+void receive_array()
+{
+    int bytes_received;
+    int i;
+    addr_len = sizeof(server_addr);
+    bytes_received =recvfrom(sockfd,&n,sizeof(n),0,(struct sockaddr *)&server_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    bytes_received =recvfrom(sockfd,array,n * sizeof(int),0,(struct sockaddr *)&server_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("Receive failed");
+        return;
+    }
+    printf("\nEcho received from server: ");
+    for (i = 0; i < n; i++)
+    {
+        printf("%d ", array[i]);
+    }
+    printf("\n");
+}
+void close_client()
+{
+    close(sockfd);
+}
