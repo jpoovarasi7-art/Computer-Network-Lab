@@ -1,0 +1,135 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/signal.h>
+#include <sys/wait.h>
+
+#define BUFFER_SIZE 1024
+
+// Reclaims kernel resources when child processes exit to avoid zombies
+void handle_zombie(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
+// Child process executes this to manage individual client downloads
+void handle_client(int client_socket, struct sockaddr_in client_address) {
+    char buffer[BUFFER_SIZE] = {0};
+    char client_ip[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
+    int client_port = ntohs(client_address.sin_port);
+
+    // Read the requested filename
+    int valread = read(client_socket, buffer, BUFFER_SIZE);
+    if (valread <= 0) {
+        close(client_socket);
+        exit(0);
+    }
+
+    buffer[strcspn(buffer, "\r\n")] = 0; // Strip newlines
+    printf("[[%s:%d]] Requested file: '%s'\n", client_ip, client_port, buffer);
+
+    FILE *file = fopen(buffer, "rb");
+    if (file == NULL) {
+        printf("[[%s:%d]] File not found.\n", client_ip, client_port);
+        char *msg = "FILE_NOT_FOUND";
+        send(client_socket, msg, strlen(msg), 0);
+    } else {
+        // Calculate file size
+        fseek(file, 0, SEEK_END);
+        long filesize = ftell(file);
+        fseek(file, 0, SEEK_SET);
+
+        printf("[[%s:%d]] Found. Size: %ld bytes. Notifying client...\n", client_ip, client_port, filesize);
+
+        char response[BUFFER_SIZE];
+        snprintf(response, sizeof(response), "FILE_FOUND:%ld", filesize);
+        send(client_socket, response, strlen(response), 0);
+
+        // Wait for client's READY acknowledgment
+        memset(buffer, 0, BUFFER_SIZE);
+        read(client_socket, buffer, BUFFER_SIZE);
+
+        // Stream the binary data
+        size_t bytes_read;
+        while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+            send(client_socket, buffer, bytes_read, 0);
+        }
+        printf("[[%s:%d]] File transfer successfully completed.\n", client_ip, client_port);
+        fclose(file);
+    }
+
+    close(client_socket);
+    exit(0); // Safely exit the child process
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <IP_Address> <Port>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    char *ip_address = argv[1];
+    int port = atoi(argv[2]);
+
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    // Clean up terminated child statuses dynamically
+    signal(SIGCHLD, handle_zombie);
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("Socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Eliminate port freeze delay on rapid restarts
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip_address, &address.sin_addr) <= 0) {
+        fprintf(stderr, "Error: Invalid local IP bind address\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 10) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Concurrent FTP Server active on %s:%d...\n", ip_address, port);
+
+    while (1) {
+        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        if (new_socket < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        // Split off connection execution to a child fork
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(server_fd); // Child closes listener
+            handle_client(new_socket, address);
+        } else if (pid > 0) {
+            close(new_socket); // Parent drops specific file handle descriptor
+        } else {
+            perror("Fork execution failed");
+            close(new_socket);
+        }
+    }
+
+    close(server_fd);
+    return 0;
+}
