@@ -1,0 +1,188 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#define BUFFER_SIZE 1024
+int sockfd;
+int port;
+struct sockaddr_in server_addr;
+socklen_t addr_len;
+char client_name[50];
+char buffer[BUFFER_SIZE];
+char subnet_network[50];
+char subnet_last[50];
+char subnet_mask[50];
+int subnet_number;
+int subnet_prefix;
+void create_socket();
+void setup_server(char ip[], int port);
+void get_client_name();
+void run_client();
+void send_discover();
+void receive_offer();
+void send_request();
+void receive_ack();
+void send_client_ack();
+void display_offer();
+void close_client();
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n", argv[0]);
+        printf("Example: %s 127.0.0.1 8080\n",
+               argv[0]);
+        return 1;
+    }
+    port = atoi(argv[2]);
+    create_socket();
+    setup_server(argv[1], port);
+    get_client_name();
+    run_client();
+    close_client();
+    return 0;
+}
+void create_socket()
+{
+    sockfd =socket(AF_INET,SOCK_DGRAM,0);
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+void setup_server(char ip[], int port)
+{
+    int result;
+    memset(&server_addr,0,sizeof(server_addr));
+    server_addr.sin_family =AF_INET;
+    server_addr.sin_port =htons(port);
+    result =inet_pton(AF_INET,ip,&server_addr.sin_addr);
+    if (result <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(sockfd);
+        exit(1);
+    }
+}
+void get_client_name()
+{
+    printf("\nEnter Client Name: ");
+    scanf("%49s", client_name);
+    printf("\nClient %s started.\n",client_name);
+}
+void run_client()
+{
+    char choice;
+    while (1)
+    {
+        printf("\n============================================\n");
+        printf("                DHCP CLIENT\n");
+        printf("============================================\n");
+        printf("1. Request IP Subnet\n");
+        printf("2. Exit\n");
+        printf("Enter choice: ");
+        scanf(" %c", &choice);
+        if (choice == '1')
+        {
+            send_discover();
+            receive_offer();
+            display_offer();
+            send_request();
+            receive_ack();
+            send_client_ack();
+        }
+        else if (choice == '2')
+        {
+            printf("\nClient %s exiting...\n",
+                   client_name);
+            break;
+        }
+        else
+        {
+            printf("\nInvalid choice.\n");
+        }
+    }
+}
+void send_discover()
+{
+    int bytes_sent;
+    sprintf(buffer,"DHCPDISCOVER|%s|0",client_name);
+    bytes_sent =sendto(sockfd,buffer,strlen(buffer),0,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (bytes_sent < 0)
+    {
+        perror("DHCPDISCOVER failed");
+        return;
+    }
+    printf("\nDHCPDISCOVER sent to server.\n");
+}
+void receive_offer()
+{
+    int bytes_received;
+    addr_len =sizeof(server_addr);
+    bytes_received =recvfrom(sockfd,buffer,BUFFER_SIZE - 1,0,(struct sockaddr *)&server_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("DHCPOFFER receive failed");
+        return;
+    }
+    buffer[bytes_received] = '\0';
+    sscanf(buffer,"DHCPOFFER|%49[^|]|%d|%49[^|]|%49[^|]|/%d|%49[^|]",client_name,&subnet_number,subnet_network,subnet_last,&subnet_prefix,subnet_mask);
+}
+void display_offer()
+{
+    printf("\n============================================\n");
+    printf("             DHCP OFFER RECEIVED\n");
+    printf("============================================\n");
+    printf("Client          : %s\n",client_name);
+    printf("Subnet Number   : %d\n",subnet_number);
+    printf("Network Address : %s\n",subnet_network);
+    printf("Last Address    : %s\n",subnet_last);
+    printf("Prefix          : /%d\n",subnet_prefix);
+    printf("Subnet Mask     : %s\n",subnet_mask);
+    printf("============================================\n");
+}
+void send_request()
+{
+    int bytes_sent;
+    sprintf(buffer,"DHCPREQUEST|%s|%d",client_name,subnet_number);
+    bytes_sent =sendto(sockfd,buffer,strlen(buffer),0,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (bytes_sent < 0)
+    {
+        perror("DHCPREQUEST failed");
+        return;
+    }
+    printf("\nDHCPREQUEST sent for Subnet %d.\n",subnet_number);
+}
+void receive_ack()
+{
+    int bytes_received;
+    addr_len =sizeof(server_addr);
+    bytes_received =recvfrom(sockfd,buffer,BUFFER_SIZE - 1,0,(struct sockaddr *)&server_addr,&addr_len);
+    if (bytes_received < 0)
+    {
+        perror("DHCPACK receive failed");
+        return;
+    }
+    buffer[bytes_received] = '\0';
+    printf("\nDHCPACK received from server.\n");
+    printf("Message: %s\n",buffer);
+}
+void send_client_ack()
+{
+    int bytes_sent;
+    sprintf(buffer,"CLIENT_ACK|%s|%d",client_name,subnet_number);
+    bytes_sent =sendto(sockfd,buffer,strlen(buffer),0,(struct sockaddr *)&server_addr,sizeof(server_addr));
+    if (bytes_sent < 0)
+    {
+        perror("Client ACK failed");
+        return;
+    }
+    printf("\nClient acknowledgement sent to server.\n");
+}
+void close_client()
+{
+    close(sockfd);
+    printf("Client terminated.\n");
+}
