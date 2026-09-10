@@ -1,0 +1,181 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 1024
+
+/* Global variables */
+
+int sockfd;
+int port;
+
+struct sockaddr_in server_addr;
+
+char buffer[BUFFER_SIZE];
+char result[BUFFER_SIZE];
+
+/* Function declarations */
+
+void create_socket();
+void setup_server(char ip[], int port);
+void get_input();
+void send_string();
+void receive_result();
+void close_client();
+
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+    {
+        printf("Usage: %s <type> <IP> <port>\n", argv[0]);
+        printf("Example: %s iterative 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "iterative") != 0)
+    {
+        printf("Only iterative mode is supported.\n");
+        return 1;
+    }
+
+    port = atoi(argv[3]);
+
+    create_socket();
+
+    setup_server(argv[2], port);
+
+    get_input();
+
+    send_string();
+
+    receive_result();
+
+    close_client();
+
+    return 0;
+}
+
+
+/* Create TCP socket */
+
+void create_socket()
+{
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server address and connect */
+
+void setup_server(char ip[], int port)
+{
+    int result;
+
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    result = inet_pton(AF_INET,
+                       ip,
+                       &server_addr.sin_addr);
+
+    if (result <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(sockfd);
+        exit(1);
+    }
+
+    result = connect(sockfd,
+                     (struct sockaddr *)&server_addr,
+                     sizeof(server_addr));
+
+    if (result < 0)
+    {
+        perror("Connection failed");
+        close(sockfd);
+        exit(1);
+    }
+
+    printf("\nConnected to palindrome server.\n");
+}
+
+
+/* Get string from user */
+
+void get_input()
+{
+    printf("Enter a string: ");
+
+    fgets(buffer,
+          BUFFER_SIZE,
+          stdin);
+
+    buffer[strcspn(buffer, "\n")] = '\0';
+}
+
+
+/* Send string */
+
+void send_string()
+{
+    int bytes_sent;
+
+    bytes_sent = send(sockfd,
+                      buffer,
+                      strlen(buffer),
+                      0);
+
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+        return;
+    }
+
+    printf("String sent to server.\n");
+}
+
+
+/* Receive result */
+
+void receive_result()
+{
+    int bytes_received;
+
+    memset(result, 0, sizeof(result));
+
+    bytes_received = recv(sockfd,
+                          result,
+                          BUFFER_SIZE - 1,
+                          0);
+
+    if (bytes_received <= 0)
+    {
+        printf("Server disconnected.\n");
+        return;
+    }
+
+    result[bytes_received] = '\0';
+
+    printf("Server result: %s\n",
+           result);
+}
+
+
+/* Close client */
+
+void close_client()
+{
+    close(sockfd);
+
+    printf("Client terminated.\n");
+}
