@@ -1,0 +1,896 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <time.h>
+
+#define BUFFER_SIZE 2048
+#define MAX_STUDENTS 100
+
+/* Global variables */
+
+int server_fd;
+int client_fd;
+int port;
+
+struct sockaddr_in server_addr;
+struct sockaddr_in client_addr;
+
+socklen_t addr_len;
+
+char buffer[BUFFER_SIZE];
+char client_ip[INET_ADDRSTRLEN];
+
+FILE *student_file;
+FILE *log_file;
+
+/* Student structure */
+
+struct Student
+{
+    char regno[20];
+    char name[50];
+    char department[30];
+    int semester;
+    int marks[5];
+    char grade[10];
+    float cgpa;
+};
+
+/* Global student array */
+
+struct Student students[MAX_STUDENTS];
+
+int student_count;
+
+/* Function declarations */
+
+void create_socket();
+void setup_server(char ip[], int port);
+void run_server();
+
+void load_students();
+void save_students();
+
+void authenticate_client();
+int check_login();
+
+void process_client();
+
+void search_student();
+void add_student();
+void update_student();
+void delete_student();
+void display_students();
+void class_topper();
+
+void send_message(char message[]);
+void receive_message();
+
+void calculate_result(int index);
+
+void write_log(char activity[]);
+void get_current_time(char time_string[]);
+
+void close_client();
+void close_server();
+
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+    {
+        printf("Usage: %s <type> <IP> <port>\n", argv[0]);
+        printf("Example: %s iterative 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "iterative") != 0)
+    {
+        printf("Only iterative mode is supported.\n");
+        return 1;
+    }
+
+    port = atoi(argv[3]);
+
+    create_socket();
+
+    setup_server(argv[2], port);
+
+    load_students();
+
+    run_server();
+
+    close_server();
+
+    return 0;
+}
+
+
+/* Create TCP socket */
+
+void create_socket()
+{
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_fd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server */
+
+void setup_server(char ip[], int port)
+{
+    int result;
+
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    if (strcmp(ip, "0.0.0.0") == 0)
+    {
+        server_addr.sin_addr.s_addr = INADDR_ANY;
+    }
+    else
+    {
+        result = inet_pton(AF_INET,
+                           ip,
+                           &server_addr.sin_addr);
+
+        if (result <= 0)
+        {
+            printf("Invalid IP address.\n");
+            close(server_fd);
+            exit(1);
+        }
+    }
+
+    result = bind(server_fd,
+                  (struct sockaddr *)&server_addr,
+                  sizeof(server_addr));
+
+    if (result < 0)
+    {
+        perror("Bind failed");
+        close(server_fd);
+        exit(1);
+    }
+
+    result = listen(server_fd, 5);
+
+    if (result < 0)
+    {
+        perror("Listen failed");
+        close(server_fd);
+        exit(1);
+    }
+
+    printf("\n============================================\n");
+    printf("       STUDENT RESULT SERVER\n");
+    printf("============================================\n");
+    printf("Type : iterative\n");
+    printf("IP   : %s\n", ip);
+    printf("Port : %d\n", port);
+    printf("Server is waiting for clients...\n");
+}
+
+
+/* Run iterative server */
+
+void run_server()
+{
+    while (1)
+    {
+        addr_len = sizeof(client_addr);
+
+        client_fd = accept(server_fd,
+                           (struct sockaddr *)&client_addr,
+                           &addr_len);
+
+        if (client_fd < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        inet_ntop(AF_INET,
+                  &client_addr.sin_addr,
+                  client_ip,
+                  INET_ADDRSTRLEN);
+
+        printf("\n--------------------------------------------\n");
+        printf("Client connected.\n");
+        printf("Client IP   : %s\n", client_ip);
+        printf("Client Port : %d\n",
+               ntohs(client_addr.sin_port));
+
+        authenticate_client();
+
+        close_client();
+
+        printf("Client disconnected.\n");
+        printf("Server waiting for another client...\n");
+    }
+}
+
+
+/* Load records from permanent file */
+
+void load_students()
+{
+    student_count = 0;
+
+    student_file = fopen("students.txt", "r");
+
+    if (student_file == NULL)
+    {
+        return;
+    }
+
+    while (student_count < MAX_STUDENTS &&
+           fscanf(student_file,
+                  "%19[^|]|%49[^|]|%29[^|]|%d|%d|%d|%d|%d|%9[^|]|%f\n",
+                  students[student_count].regno,
+                  students[student_count].name,
+                  students[student_count].department,
+                  &students[student_count].semester,
+                  &students[student_count].marks[0],
+                  &students[student_count].marks[1],
+                  &students[student_count].marks[2],
+                  &students[student_count].marks[3],
+                  students[student_count].grade,
+                  &students[student_count].cgpa) == 10)
+    {
+        student_count++;
+    }
+
+    fclose(student_file);
+}
+
+
+/* Save all records */
+
+void save_students()
+{
+    int i;
+
+    student_file = fopen("students.txt", "w");
+
+    if (student_file == NULL)
+    {
+        return;
+    }
+
+    for (i = 0; i < student_count; i++)
+    {
+        fprintf(student_file,
+                "%s|%s|%s|%d|%d|%d|%d|%d|%s|%.2f\n",
+                students[i].regno,
+                students[i].name,
+                students[i].department,
+                students[i].semester,
+                students[i].marks[0],
+                students[i].marks[1],
+                students[i].marks[2],
+                students[i].marks[3],
+                students[i].grade,
+                students[i].cgpa);
+    }
+
+    fclose(student_file);
+}
+
+
+/* Authenticate client */
+
+void authenticate_client()
+{
+    int login_result;
+
+    receive_message();
+
+    if (buffer[0] == '\0')
+    {
+        return;
+    }
+
+    login_result = check_login();
+
+    if (login_result == 1)
+    {
+        send_message("LOGIN_SUCCESS");
+
+        printf("Authentication successful.\n");
+
+        write_log("LOGIN SUCCESS");
+
+        process_client();
+    }
+    else
+    {
+        send_message("LOGIN_FAILED");
+
+        printf("Authentication failed.\n");
+
+        write_log("LOGIN FAILED");
+    }
+}
+
+
+/* Check login */
+
+int check_login()
+{
+    char username[50];
+    char password[50];
+
+    sscanf(buffer,
+           "%49[^|]|%49s",
+           username,
+           password);
+
+    if (strcmp(username, "admin") == 0 &&
+        strcmp(password, "1234") == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+/* Process client requests */
+
+void process_client()
+{
+    int choice;
+
+    while (1)
+    {
+        receive_message();
+
+        if (buffer[0] == '\0')
+        {
+            break;
+        }
+
+        choice = atoi(buffer);
+
+        if (choice == 1)
+        {
+            search_student();
+        }
+        else if (choice == 2)
+        {
+            add_student();
+        }
+        else if (choice == 3)
+        {
+            update_student();
+        }
+        else if (choice == 4)
+        {
+            delete_student();
+        }
+        else if (choice == 5)
+        {
+            display_students();
+        }
+        else if (choice == 6)
+        {
+            class_topper();
+        }
+        else if (choice == 7)
+        {
+            send_message("SESSION_TERMINATED");
+
+            write_log("SESSION TERMINATED");
+
+            break;
+        }
+        else
+        {
+            send_message("ERROR: Invalid menu choice.");
+
+            write_log("INVALID MENU REQUEST");
+        }
+    }
+}
+
+
+/* Search student */
+
+void search_student()
+{
+    int i;
+    int found;
+
+    found = 0;
+
+    send_message("Enter Register Number:");
+
+    receive_message();
+
+    for (i = 0; i < student_count; i++)
+    {
+        if (strcmp(students[i].regno, buffer) == 0)
+        {
+            sprintf(buffer,
+                    "Register Number : %s\n"
+                    "Name            : %s\n"
+                    "Department      : %s\n"
+                    "Semester        : %d\n"
+                    "Marks           : %d %d %d %d\n"
+                    "Grade           : %s\n"
+                    "CGPA            : %.2f",
+                    students[i].regno,
+                    students[i].name,
+                    students[i].department,
+                    students[i].semester,
+                    students[i].marks[0],
+                    students[i].marks[1],
+                    students[i].marks[2],
+                    students[i].marks[3],
+                    students[i].grade,
+                    students[i].cgpa);
+
+            send_message(buffer);
+
+            found = 1;
+
+            write_log("SEARCH STUDENT - SUCCESS");
+
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        send_message("ERROR: Student record not found.");
+
+        write_log("SEARCH STUDENT - NOT FOUND");
+    }
+}
+
+
+/* Add student */
+
+void add_student()
+{
+    int i;
+    int duplicate;
+
+    if (student_count >= MAX_STUDENTS)
+    {
+        send_message("ERROR: Student database is full.");
+        return;
+    }
+
+    send_message("Enter Register Number:");
+
+    receive_message();
+
+    duplicate = 0;
+
+    for (i = 0; i < student_count; i++)
+    {
+        if (strcmp(students[i].regno, buffer) == 0)
+        {
+            duplicate = 1;
+            break;
+        }
+    }
+
+    if (duplicate == 1)
+    {
+        send_message("ERROR: Register Number already exists.");
+
+        write_log("ADD STUDENT - DUPLICATE");
+
+        return;
+    }
+
+    strcpy(students[student_count].regno,
+           buffer);
+
+    send_message("Enter Name:");
+
+    receive_message();
+
+    strcpy(students[student_count].name,
+           buffer);
+
+    send_message("Enter Department:");
+
+    receive_message();
+
+    strcpy(students[student_count].department,
+           buffer);
+
+    send_message("Enter Semester:");
+
+    receive_message();
+
+    students[student_count].semester =
+        atoi(buffer);
+
+    send_message("Enter 4 Subject Marks separated by space:");
+
+    receive_message();
+
+    sscanf(buffer,
+           "%d %d %d %d",
+           &students[student_count].marks[0],
+           &students[student_count].marks[1],
+           &students[student_count].marks[2],
+           &students[student_count].marks[3]);
+
+    calculate_result(student_count);
+
+    student_count++;
+
+    save_students();
+
+    send_message("Student added successfully.");
+
+    write_log("ADD STUDENT - SUCCESS");
+}
+
+
+/* Calculate grade and CGPA */
+
+void calculate_result(int index)
+{
+    float average;
+    int total;
+
+    total =
+        students[index].marks[0] +
+        students[index].marks[1] +
+        students[index].marks[2] +
+        students[index].marks[3];
+
+    average = total / 4.0;
+
+    students[index].cgpa =
+        average / 10.0;
+
+    if (average >= 90)
+    {
+        strcpy(students[index].grade, "A+");
+    }
+    else if (average >= 80)
+    {
+        strcpy(students[index].grade, "A");
+    }
+    else if (average >= 70)
+    {
+        strcpy(students[index].grade, "B");
+    }
+    else if (average >= 60)
+    {
+        strcpy(students[index].grade, "C");
+    }
+    else if (average >= 50)
+    {
+        strcpy(students[index].grade, "D");
+    }
+    else
+    {
+        strcpy(students[index].grade, "F");
+    }
+}
+
+
+/* Update student */
+
+void update_student()
+{
+    int i;
+    int found;
+
+    found = 0;
+
+    send_message("Enter Register Number:");
+
+    receive_message();
+
+    for (i = 0; i < student_count; i++)
+    {
+        if (strcmp(students[i].regno, buffer) == 0)
+        {
+            found = 1;
+
+            send_message("Enter New Name:");
+
+            receive_message();
+
+            strcpy(students[i].name, buffer);
+
+            send_message("Enter New Department:");
+
+            receive_message();
+
+            strcpy(students[i].department, buffer);
+
+            send_message("Enter New Semester:");
+
+            receive_message();
+
+            students[i].semester =
+                atoi(buffer);
+
+            send_message("Enter 4 New Subject Marks:");
+
+            receive_message();
+
+            sscanf(buffer,
+                   "%d %d %d %d",
+                   &students[i].marks[0],
+                   &students[i].marks[1],
+                   &students[i].marks[2],
+                   &students[i].marks[3]);
+
+            calculate_result(i);
+
+            save_students();
+
+            send_message("Student updated successfully.");
+
+            write_log("UPDATE STUDENT - SUCCESS");
+
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        send_message("ERROR: Student record not found.");
+
+        write_log("UPDATE STUDENT - NOT FOUND");
+    }
+}
+
+
+/* Delete student */
+
+void delete_student()
+{
+    int i;
+    int j;
+    int found;
+
+    found = 0;
+
+    send_message("Enter Register Number:");
+
+    receive_message();
+
+    for (i = 0; i < student_count; i++)
+    {
+        if (strcmp(students[i].regno, buffer) == 0)
+        {
+            found = 1;
+
+            for (j = i; j < student_count - 1; j++)
+            {
+                students[j] = students[j + 1];
+            }
+
+            student_count--;
+
+            save_students();
+
+            send_message("Student deleted successfully.");
+
+            write_log("DELETE STUDENT - SUCCESS");
+
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        send_message("ERROR: Student record not found.");
+
+        write_log("DELETE STUDENT - NOT FOUND");
+    }
+}
+
+
+/* Display all students */
+
+void display_students()
+{
+    int i;
+    char all_records[BUFFER_SIZE];
+
+    memset(all_records, 0, sizeof(all_records));
+
+    if (student_count == 0)
+    {
+        send_message("No student records available.");
+
+        write_log("DISPLAY STUDENTS - EMPTY");
+
+        return;
+    }
+
+    for (i = 0; i < student_count; i++)
+    {
+        sprintf(buffer,
+                "Reg: %s | Name: %s | Dept: %s | Sem: %d | "
+                "Grade: %s | CGPA: %.2f\n",
+                students[i].regno,
+                students[i].name,
+                students[i].department,
+                students[i].semester,
+                students[i].grade,
+                students[i].cgpa);
+
+        strcat(all_records, buffer);
+    }
+
+    send_message(all_records);
+
+    write_log("DISPLAY ALL STUDENTS");
+}
+
+
+/* Find class topper */
+
+void class_topper()
+{
+    int i;
+    int topper;
+
+    if (student_count == 0)
+    {
+        send_message("No student records available.");
+
+        write_log("CLASS TOPPER - NO RECORDS");
+
+        return;
+    }
+
+    topper = 0;
+
+    for (i = 1; i < student_count; i++)
+    {
+        if (students[i].cgpa >
+            students[topper].cgpa)
+        {
+            topper = i;
+        }
+    }
+
+    sprintf(buffer,
+            "CLASS TOPPER\n"
+            "Register Number : %s\n"
+            "Name            : %s\n"
+            "Department      : %s\n"
+            "Semester        : %d\n"
+            "Grade           : %s\n"
+            "CGPA            : %.2f",
+            students[topper].regno,
+            students[topper].name,
+            students[topper].department,
+            students[topper].semester,
+            students[topper].grade,
+            students[topper].cgpa);
+
+    send_message(buffer);
+
+    write_log("CLASS TOPPER REQUEST");
+}
+
+
+/* Send message */
+
+void send_message(char message[])
+{
+    int bytes_sent;
+
+    bytes_sent =
+        send(client_fd,
+             message,
+             strlen(message),
+             0);
+
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+    }
+}
+
+
+/* Receive message */
+
+void receive_message()
+{
+    int bytes_received;
+
+    memset(buffer, 0, sizeof(buffer));
+
+    bytes_received =
+        recv(client_fd,
+             buffer,
+             BUFFER_SIZE - 1,
+             0);
+
+    if (bytes_received <= 0)
+    {
+        buffer[0] = '\0';
+        return;
+    }
+
+    buffer[bytes_received] = '\0';
+}
+
+
+/* Write transaction log */
+
+void write_log(char activity[])
+{
+    char time_string[100];
+
+    get_current_time(time_string);
+
+    log_file = fopen("student_log.txt", "a");
+
+    if (log_file == NULL)
+    {
+        return;
+    }
+
+    fprintf(log_file,
+            "[%s] IP: %s | Port: %d | Activity: %s\n",
+            time_string,
+            client_ip,
+            ntohs(client_addr.sin_port),
+            activity);
+
+    fclose(log_file);
+}
+
+
+/* Get current time */
+
+void get_current_time(char time_string[])
+{
+    time_t current_time;
+    struct tm *time_info;
+
+    current_time = time(NULL);
+
+    time_info = localtime(&current_time);
+
+    strftime(time_string,
+             100,
+             "%d-%m-%Y %H:%M:%S",
+             time_info);
+}
+
+
+/* Close client */
+
+void close_client()
+{
+    close(client_fd);
+}
+
+
+/* Close server */
+
+void close_server()
+{
+    close(server_fd);
+
+    printf("\nServer terminated.\n");
+}
