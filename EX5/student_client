@@ -1,0 +1,502 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 2048
+
+/* Global variables */
+
+int sockfd;
+int port;
+
+struct sockaddr_in server_addr;
+
+char buffer[BUFFER_SIZE];
+char username[50];
+char password[50];
+
+/* Function declarations */
+
+void create_socket();
+void setup_server(char ip[], int port);
+
+void login();
+
+void show_menu();
+void process_menu();
+
+void search_student();
+void add_student();
+void update_student();
+void delete_student();
+void display_students();
+void class_topper();
+
+void send_message(char message[]);
+void receive_message();
+
+void close_client();
+
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+    {
+        printf("Usage: %s <type> <IP> <port>\n", argv[0]);
+        printf("Example: %s iterative 127.0.0.1 8080\n", argv[0]);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "iterative") != 0)
+    {
+        printf("Only iterative mode is supported.\n");
+        return 1;
+    }
+
+    port = atoi(argv[3]);
+
+    create_socket();
+
+    setup_server(argv[2], port);
+
+    login();
+
+    process_menu();
+
+    close_client();
+
+    return 0;
+}
+
+
+/* Create socket */
+
+void create_socket()
+{
+    sockfd =
+        socket(AF_INET,
+               SOCK_STREAM,
+               0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Connect to server */
+
+void setup_server(char ip[], int port)
+{
+    int result;
+
+    memset(&server_addr,
+           0,
+           sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    result =
+        inet_pton(AF_INET,
+                  ip,
+                  &server_addr.sin_addr);
+
+    if (result <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(sockfd);
+        exit(1);
+    }
+
+    result =
+        connect(sockfd,
+                (struct sockaddr *)&server_addr,
+                sizeof(server_addr));
+
+    if (result < 0)
+    {
+        perror("Connection failed");
+        close(sockfd);
+        exit(1);
+    }
+
+    printf("\nConnected to Student Result Server.\n");
+}
+
+
+/* Login */
+
+void login()
+{
+    printf("\n============================================\n");
+    printf("              STUDENT SYSTEM LOGIN\n");
+    printf("============================================\n");
+
+    printf("Username: ");
+    scanf("%49s", username);
+
+    printf("Password: ");
+    scanf("%49s", password);
+
+    sprintf(buffer,
+            "%s|%s",
+            username,
+            password);
+
+    send_message(buffer);
+
+    receive_message();
+
+    if (strcmp(buffer, "LOGIN_SUCCESS") == 0)
+    {
+        printf("\nLogin successful.\n");
+    }
+    else
+    {
+        printf("\nLogin failed.\n");
+        close_client();
+        exit(1);
+    }
+}
+
+
+/* Display menu */
+
+void show_menu()
+{
+    printf("\n============================================\n");
+    printf("       STUDENT RESULT MANAGEMENT SYSTEM\n");
+    printf("============================================\n");
+    printf("1. Search Student\n");
+    printf("2. Add Student\n");
+    printf("3. Update Student\n");
+    printf("4. Delete Student\n");
+    printf("5. Display All Students\n");
+    printf("6. Class Topper\n");
+    printf("7. Exit\n");
+    printf("============================================\n");
+}
+
+
+/* Process menu */
+
+void process_menu()
+{
+    int choice;
+
+    while (1)
+    {
+        show_menu();
+
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+
+        sprintf(buffer,
+                "%d",
+                choice);
+
+        send_message(buffer);
+
+        if (choice == 1)
+        {
+            search_student();
+        }
+        else if (choice == 2)
+        {
+            add_student();
+        }
+        else if (choice == 3)
+        {
+            update_student();
+        }
+        else if (choice == 4)
+        {
+            delete_student();
+        }
+        else if (choice == 5)
+        {
+            display_students();
+        }
+        else if (choice == 6)
+        {
+            class_topper();
+        }
+        else if (choice == 7)
+        {
+            receive_message();
+
+            printf("\nServer: %s\n",
+                   buffer);
+
+            break;
+        }
+        else
+        {
+            receive_message();
+
+            printf("\nServer: %s\n",
+                   buffer);
+        }
+    }
+}
+
+
+/* Search student */
+
+void search_student()
+{
+    printf("\n");
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("Enter Register Number: ");
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("\n%s\n",
+           buffer);
+}
+
+
+/* Add student */
+
+void add_student()
+{
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("Register Number: ");
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("Enter 4 Subject Marks: ");
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("\nServer: %s\n",
+           buffer);
+}
+
+
+/* Update student */
+
+void update_student()
+{
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("Register Number: ");
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    if (strncmp(buffer,
+                "ERROR",
+                5) == 0)
+    {
+        return;
+    }
+
+    printf("New Name: ");
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("New Department: ");
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("New Semester: ");
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("New 4 Subject Marks: ");
+    scanf(" %[^\n]", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("\nServer: %s\n",
+           buffer);
+}
+
+
+/* Delete student */
+
+void delete_student()
+{
+    receive_message();
+
+    printf("Server: %s\n",
+           buffer);
+
+    printf("Register Number: ");
+    scanf("%s", buffer);
+
+    send_message(buffer);
+
+    receive_message();
+
+    printf("\nServer: %s\n",
+           buffer);
+}
+
+
+/* Display all students */
+
+void display_students()
+{
+    receive_message();
+
+    printf("\n============================================\n");
+    printf("              STUDENT RECORDS\n");
+    printf("============================================\n");
+
+    printf("%s\n",
+           buffer);
+}
+
+
+/* Class topper */
+
+void class_topper()
+{
+    receive_message();
+
+    printf("\n============================================\n");
+    printf("               CLASS TOPPER\n");
+    printf("============================================\n");
+
+    printf("%s\n",
+           buffer);
+}
+
+
+/* Send message */
+
+void send_message(char message[])
+{
+    int bytes_sent;
+
+    bytes_sent =
+        send(sockfd,
+             message,
+             strlen(message),
+             0);
+
+    if (bytes_sent < 0)
+    {
+        perror("Send failed");
+    }
+}
+
+
+/* Receive message */
+
+void receive_message()
+{
+    int bytes_received;
+
+    memset(buffer,
+           0,
+           sizeof(buffer));
+
+    bytes_received =
+        recv(sockfd,
+             buffer,
+             BUFFER_SIZE - 1,
+             0);
+
+    if (bytes_received <= 0)
+    {
+        printf("Server disconnected.\n");
+        close_client();
+        exit(1);
+    }
+
+    buffer[bytes_received] = '\0';
+}
+
+
+/* Close client */
+
+void close_client()
+{
+    close(sockfd);
+
+    printf("\nClient terminated.\n");
+}
