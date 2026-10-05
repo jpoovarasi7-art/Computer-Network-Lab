@@ -707,3 +707,52 @@ void close_server()
 {
     close(server_socket);
 }
+void process_request(struct Request request)
+{
+    struct Response response_packet;
+
+    memset(&response_packet, 0, sizeof(response_packet));
+
+    response_packet.transaction_id =
+        request.transaction_id;
+
+    response_packet.status = FAILURE;
+
+    memset(response, 0, sizeof(response));
+
+    if (request.operation == SEARCH)
+    {
+        search_book(request.data);
+    }
+    else if (request.operation == ISSUE)
+    {
+        issue_book(request.data);
+    }
+    else if (request.operation == RETURN_BOOK)
+    {
+        return_book(request.data);
+    }
+    else if (request.operation == AVAILABLE)
+    {
+        available_books();
+    }
+    else
+    {
+        strcpy(response,
+               "Invalid operation.");
+    }
+
+    strcpy(
+        response_packet.data,
+        response
+    );
+
+    response_packet.status = SUCCESS;
+
+    strcpy(
+        last_response,
+        response
+    );
+
+    send_response(response_packet);
+}
