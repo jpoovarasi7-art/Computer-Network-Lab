@@ -1,0 +1,696 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 1024
+#define MAX_MOVIES 10
+#define MAX_BOOKINGS 100
+
+#define MOVIE_LIST 1
+#define AVAILABILITY 2
+#define BOOK 3
+#define CANCEL 4
+#define DETAILS 5
+#define EXIT 6
+
+int server_socket;
+int client_socket;
+int port;
+
+int movie_count = 5;
+int booking_count = 0;
+
+struct sockaddr_in server_addr;
+struct sockaddr_in client_addr;
+
+socklen_t client_len;
+
+char buffer[BUFFER_SIZE];
+char response[BUFFER_SIZE];
+
+struct Movie
+{
+    int movie_id;
+    char name[100];
+    char timing[30];
+    int seats;
+    float price;
+};
+
+struct Booking
+{
+    int booking_id;
+    int movie_id;
+    char customer[100];
+    int seats;
+    float amount;
+    char status[20];
+};
+
+struct Movie movies[MAX_MOVIES] =
+{
+    {101, "Leo", "10:00 AM", 50, 150.00},
+    {102, "Jailer", "01:00 PM", 40, 180.00},
+    {103, "Vikram", "04:00 PM", 45, 200.00},
+    {104, "Master", "07:00 PM", 60, 160.00},
+    {105, "Retro", "10:00 PM", 50, 220.00}
+};
+
+struct Booking bookings[MAX_BOOKINGS];
+
+void create_socket();
+void setup_server();
+void run_server();
+void handle_client();
+
+void view_movies();
+void check_availability();
+void book_ticket();
+void cancel_booking();
+void booking_details();
+
+void send_response();
+void close_server();
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    create_socket();
+    setup_server();
+    run_server();
+    close_server();
+
+    return 0;
+}
+
+
+/* Create TCP socket */
+void create_socket()
+{
+    server_socket = socket(
+        AF_INET,
+        SOCK_STREAM,
+        0
+    );
+
+    if (server_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server */
+void setup_server()
+{
+    int option = 1;
+
+    setsockopt(
+        server_socket,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &option,
+        sizeof(option)
+    );
+
+    memset(
+        &server_addr,
+        0,
+        sizeof(server_addr)
+    );
+
+    server_addr.sin_family = AF_INET;
+
+    server_addr.sin_addr.s_addr =
+        INADDR_ANY;
+
+    server_addr.sin_port =
+        htons(port);
+
+    if (
+        bind(
+            server_socket,
+            (struct sockaddr *)&server_addr,
+            sizeof(server_addr)
+        ) < 0
+    )
+    {
+        perror("Bind failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    if (
+        listen(
+            server_socket,
+            5
+        ) < 0
+    )
+    {
+        perror("Listen failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    printf("\n====================================\n");
+    printf("      MOVIE TICKET SERVER\n");
+    printf("====================================\n");
+
+    printf(
+        "Server running on port %d\n",
+        port
+    );
+}
+
+
+/*
+ * Iterative server.
+ *
+ * Accept one client.
+ * Handle all requests from that client.
+ * Close the client.
+ * Then accept the next client.
+ */
+void run_server()
+{
+    while (1)
+    {
+        client_len =
+            sizeof(client_addr);
+
+        client_socket =
+            accept(
+                server_socket,
+                (struct sockaddr *)&client_addr,
+                &client_len
+            );
+
+        if (client_socket < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\nClient connected.\n");
+
+        handle_client();
+
+        close(client_socket);
+
+        printf("Client disconnected.\n");
+    }
+}
+
+
+/* Handle one client */
+void handle_client()
+{
+    int choice;
+    int bytes;
+
+    while (1)
+    {
+        memset(
+            buffer,
+            0,
+            sizeof(buffer)
+        );
+
+        bytes = recv(
+            client_socket,
+            buffer,
+            sizeof(buffer) - 1,
+            0
+        );
+
+        if (bytes <= 0)
+        {
+            break;
+        }
+
+        buffer[bytes] = '\0';
+
+        choice = atoi(buffer);
+
+        if (choice == MOVIE_LIST)
+        {
+            view_movies();
+        }
+        else if (choice == AVAILABILITY)
+        {
+            check_availability();
+        }
+        else if (choice == BOOK)
+        {
+            book_ticket();
+        }
+        else if (choice == CANCEL)
+        {
+            cancel_booking();
+        }
+        else if (choice == DETAILS)
+        {
+            booking_details();
+        }
+        else if (choice == EXIT)
+        {
+            strcpy(
+                response,
+                "Client disconnected successfully."
+            );
+
+            send_response();
+
+            break;
+        }
+        else
+        {
+            strcpy(
+                response,
+                "Invalid choice."
+            );
+
+            send_response();
+        }
+    }
+}
+
+
+/* View movie list */
+void view_movies()
+{
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    strcat(
+        response,
+        "MOVIE LIST\n"
+    );
+
+    strcat(
+        response,
+        "----------------------------------------\n"
+    );
+
+    for (int i = 0; i < movie_count; i++)
+    {
+        char temp[250];
+
+        sprintf(
+            temp,
+            "ID: %d | %s | Show: %s | Seats: %d | Price: %.2f\n",
+            movies[i].movie_id,
+            movies[i].name,
+            movies[i].timing,
+            movies[i].seats,
+            movies[i].price
+        );
+
+        strcat(
+            response,
+            temp
+        );
+    }
+
+    send_response();
+}
+
+
+/* Check seat availability */
+void check_availability()
+{
+    int movie_id;
+    int found = 0;
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &movie_id
+    );
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    for (int i = 0; i < movie_count; i++)
+    {
+        if (
+            movies[i].movie_id ==
+            movie_id
+        )
+        {
+            sprintf(
+                response,
+                "Movie: %s\nShow Time: %s\nAvailable Seats: %d\nTicket Price: %.2f",
+                movies[i].name,
+                movies[i].timing,
+                movies[i].seats,
+                movies[i].price
+            );
+
+            found = 1;
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Movie ID not found."
+        );
+    }
+
+    send_response();
+}
+
+
+/* Book tickets */
+void book_ticket()
+{
+    int movie_id;
+    int seats;
+
+    char customer[100];
+
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    /*
+     * Request format:
+     *
+     * 3 movie_id seats customer_name
+     */
+
+    if (
+        sscanf(
+            buffer,
+            "%*d %d %d %99[^\n]",
+            &movie_id,
+            &seats,
+            customer
+        ) != 3
+    )
+    {
+        strcpy(
+            response,
+            "Invalid booking request."
+        );
+
+        send_response();
+        return;
+    }
+
+    /* Validate seats */
+    if (seats <= 0)
+    {
+        strcpy(
+            response,
+            "Invalid number of seats."
+        );
+
+        send_response();
+        return;
+    }
+
+    /* Check booking capacity */
+    if (booking_count >= MAX_BOOKINGS)
+    {
+        strcpy(
+            response,
+            "Booking database is full."
+        );
+
+        send_response();
+        return;
+    }
+
+    /* Find movie */
+    for (int i = 0; i < movie_count; i++)
+    {
+        if (
+            movies[i].movie_id ==
+            movie_id
+        )
+        {
+            found = 1;
+
+            /* Check seats */
+            if (seats > movies[i].seats)
+            {
+                strcpy(
+                    response,
+                    "Booking failed: Not enough seats available."
+                );
+
+                send_response();
+                return;
+            }
+
+            /*
+             * Reduce seats after
+             * successful booking.
+             */
+            movies[i].seats =
+                movies[i].seats - seats;
+
+            /* Create booking */
+            bookings[booking_count].booking_id =
+                booking_count + 1001;
+
+            bookings[booking_count].movie_id =
+                movie_id;
+
+            strcpy(
+                bookings[booking_count].customer,
+                customer
+            );
+
+            bookings[booking_count].seats =
+                seats;
+
+            bookings[booking_count].amount =
+                seats * movies[i].price;
+
+            strcpy(
+                bookings[booking_count].status,
+                "CONFIRMED"
+            );
+
+            sprintf(
+                response,
+                "Booking successful!\nBooking ID: %d\nMovie: %s\nShow Time: %s\nCustomer: %s\nSeats: %d\nTotal Amount: %.2f",
+                bookings[booking_count].booking_id,
+                movies[i].name,
+                movies[i].timing,
+                customer,
+                seats,
+                bookings[booking_count].amount
+            );
+
+            booking_count++;
+
+            send_response();
+
+            return;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Booking failed: Movie ID not found."
+        );
+    }
+
+    send_response();
+}
+
+
+/* Cancel booking */
+void cancel_booking()
+{
+    int booking_id;
+    int found = 0;
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &booking_id
+    );
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    for (int i = 0; i < booking_count; i++)
+    {
+        if (
+            bookings[i].booking_id ==
+            booking_id
+        )
+        {
+            found = 1;
+
+            if (
+                strcmp(
+                    bookings[i].status,
+                    "CANCELLED"
+                ) == 0
+            )
+            {
+                strcpy(
+                    response,
+                    "Booking is already cancelled."
+                );
+
+                send_response();
+                return;
+            }
+
+            /*
+             * Return seats to movie.
+             */
+            for (int j = 0; j < movie_count; j++)
+            {
+                if (
+                    movies[j].movie_id ==
+                    bookings[i].movie_id
+                )
+                {
+                    movies[j].seats +=
+                        bookings[i].seats;
+
+                    break;
+                }
+            }
+
+            strcpy(
+                bookings[i].status,
+                "CANCELLED"
+            );
+
+            sprintf(
+                response,
+                "Booking %d cancelled successfully.\n%d seats are now available.",
+                booking_id,
+                bookings[i].seats
+            );
+
+            send_response();
+
+            return;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Booking ID not found."
+        );
+    }
+
+    send_response();
+}
+
+
+/* Display booking details */
+void booking_details()
+{
+    int booking_id;
+    int found = 0;
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &booking_id
+    );
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    for (int i = 0; i < booking_count; i++)
+    {
+        if (
+            bookings[i].booking_id ==
+            booking_id
+        )
+        {
+            sprintf(
+                response,
+                "BOOKING DETAILS\n"
+                "Booking ID: %d\n"
+                "Movie ID: %d\n"
+                "Customer: %s\n"
+                "Seats: %d\n"
+                "Amount: %.2f\n"
+                "Status: %s",
+                bookings[i].booking_id,
+                bookings[i].movie_id,
+                bookings[i].customer,
+                bookings[i].seats,
+                bookings[i].amount,
+                bookings[i].status
+            );
+
+            found = 1;
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Booking ID not found."
+        );
+    }
+
+    send_response();
+}
+
+
+/* Send response to client */
+void send_response()
+{
+    send(
+        client_socket,
+        response,
+        strlen(response) + 1,
+        0
+    );
+}
+
+
+/* Close server */
+void close_server()
+{
+    close(server_socket);
+}
