@@ -1,0 +1,122 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+struct entry
+{
+    char mac[20];
+    char ip[20];
+};
+struct entry table[] =
+{
+    {"AA:BB:CC:DD:EE:01", "192.168.1.10"},
+    {"AA:BB:CC:DD:EE:02", "192.168.1.20"},
+    {"AA:BB:CC:DD:EE:03", "192.168.1.30"},
+    {"AA:BB:CC:DD:EE:04", "192.168.1.40"},
+    {"AA:BB:CC:DD:EE:05", "192.168.1.50"}
+};
+int find_ip(char mac[], char ip[])
+{
+    int i;
+    int n = sizeof(table) / sizeof(table[0]);
+    for (i = 0; i < n; i++)
+    {
+        if (strcasecmp(mac, table[i].mac) == 0)
+        {
+            strcpy(ip, table[i].ip);
+            return 1;
+        }
+    }
+    return 0;
+}
+void display_table()
+{
+    int i;
+    int n = sizeof(table) / sizeof(table[0]);
+    printf("\nRARP SERVER\n");
+    printf("\nMAC Address          IP Address\n");
+    printf("-------------------------------------\n");
+    for (i = 0; i < n; i++)
+    {
+        printf("%-20s %s\n",
+               table[i].mac, table[i].ip);
+    }
+    printf("-------------------------------------\n");
+}
+int main(int argc, char *argv[])
+{
+    int server_sock, client_sock;
+    int port;
+    int opt = 1;
+    char server_ip[20];
+    char mac[20];
+    char ip[20];
+    struct sockaddr_in server, client;
+    socklen_t client_len;
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+    strcpy(server_ip, argv[1]);
+    port = atoi(argv[2]);
+    display_table();
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR,&opt, sizeof(opt));
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(port);
+    if (inet_pton(AF_INET, server_ip,&server.sin_addr) <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(server_sock);
+        return 1;
+    }
+    if (bind(server_sock,(struct sockaddr *)&server,sizeof(server)) < 0)
+    {
+        perror("Bind failed");
+        close(server_sock);
+        return 1;
+    }
+    listen(server_sock, 5);
+    printf("\nServer IP   : %s", server_ip);
+    printf("\nServer Port : %d\n", port);
+    printf("\nWaiting for client...\n");
+    while (1)
+    {
+        client_len = sizeof(client);
+        client_sock = accept(server_sock,(struct sockaddr *)&client,&client_len);
+        if (client_sock < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+        memset(mac, 0, sizeof(mac));
+        memset(ip, 0, sizeof(ip));
+        recv(client_sock, mac, sizeof(mac) - 1, 0);
+        printf("\nMAC received: %s\n", mac);
+        if (find_ip(mac, ip))
+        {
+            printf("MAC found in server table.\n");
+            printf("IP Address: %s\n", ip);
+            send(client_sock,ip,strlen(ip) + 1,0);
+        }
+        else
+        {
+            printf("MAC not found in server table.\n");
+            strcpy(ip, "NOT_FOUND");
+            send(client_sock,ip,strlen(ip) + 1,0);
+        }
+        close(client_sock);
+        printf("\nWaiting for next client...\n");
+    }
+    close(server_sock);
+    return 0;
+}
