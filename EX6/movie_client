@@ -1,0 +1,418 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 1024
+
+#define MOVIE_LIST 1
+#define AVAILABILITY 2
+#define BOOK 3
+#define CANCEL 4
+#define DETAILS 5
+#define EXIT 6
+
+int client_socket;
+int port;
+
+char server_ip[50];
+
+char buffer[BUFFER_SIZE];
+char response[BUFFER_SIZE];
+
+struct sockaddr_in server_addr;
+
+void create_socket();
+void setup_server(char ip[]);
+void connect_server();
+void menu();
+
+void view_movies();
+void check_availability();
+void book_ticket();
+void cancel_booking();
+void booking_details();
+
+void send_request();
+void receive_response();
+void close_client();
+
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf(
+            "Usage: %s <server_ip> <port>\n",
+            argv[0]
+        );
+
+        return 1;
+    }
+
+    strcpy(
+        server_ip,
+        argv[1]
+    );
+
+    port = atoi(argv[2]);
+
+    create_socket();
+    setup_server(server_ip);
+    connect_server();
+    menu();
+    close_client();
+
+    return 0;
+}
+
+
+/* Create socket */
+void create_socket()
+{
+    client_socket = socket(
+        AF_INET,
+        SOCK_STREAM,
+        0
+    );
+
+    if (client_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server address */
+void setup_server(char ip[])
+{
+    memset(
+        &server_addr,
+        0,
+        sizeof(server_addr)
+    );
+
+    server_addr.sin_family =
+        AF_INET;
+
+    server_addr.sin_port =
+        htons(port);
+
+    if (
+        inet_pton(
+            AF_INET,
+            ip,
+            &server_addr.sin_addr
+        ) <= 0
+    )
+    {
+        printf(
+            "Invalid server IP address.\n"
+        );
+
+        close(client_socket);
+        exit(1);
+    }
+}
+
+
+/* Connect to server */
+void connect_server()
+{
+    if (
+        connect(
+            client_socket,
+            (struct sockaddr *)&server_addr,
+            sizeof(server_addr)
+        ) < 0
+    )
+    {
+        perror("Connection failed");
+
+        close(client_socket);
+        exit(1);
+    }
+
+    printf(
+        "\nConnected to Movie Ticket Server.\n"
+    );
+}
+
+
+/* Client menu */
+void menu()
+{
+    int choice;
+
+    while (1)
+    {
+        printf("\n====================================\n");
+        printf("       MOVIE TICKET BOOKING\n");
+        printf("====================================\n");
+
+        printf("1. View Movie List\n");
+        printf("2. Check Seat Availability\n");
+        printf("3. Book Tickets\n");
+        printf("4. Cancel Booking\n");
+        printf("5. Display Booking Details\n");
+        printf("6. Exit\n");
+
+        printf("\nEnter choice: ");
+        scanf("%d", &choice);
+
+        getchar();
+
+        if (choice == MOVIE_LIST)
+        {
+            view_movies();
+        }
+        else if (choice == AVAILABILITY)
+        {
+            check_availability();
+        }
+        else if (choice == BOOK)
+        {
+            book_ticket();
+        }
+        else if (choice == CANCEL)
+        {
+            cancel_booking();
+        }
+        else if (choice == DETAILS)
+        {
+            booking_details();
+        }
+        else if (choice == EXIT)
+        {
+            strcpy(
+                buffer,
+                "6"
+            );
+
+            send_request();
+            receive_response();
+
+            break;
+        }
+        else
+        {
+            printf(
+                "Invalid choice.\n"
+            );
+        }
+    }
+}
+
+
+/* View movies */
+void view_movies()
+{
+    strcpy(
+        buffer,
+        "1"
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Check seat availability */
+void check_availability()
+{
+    int movie_id;
+
+    printf(
+        "\nEnter Movie ID: "
+    );
+
+    scanf(
+        "%d",
+        &movie_id
+    );
+
+    sprintf(
+        buffer,
+        "2 %d",
+        movie_id
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Book tickets */
+void book_ticket()
+{
+    int movie_id;
+    int seats;
+
+    char customer[100];
+
+    printf(
+        "\nEnter Movie ID: "
+    );
+
+    scanf(
+        "%d",
+        &movie_id
+    );
+
+    printf(
+        "Enter number of seats: "
+    );
+
+    scanf(
+        "%d",
+        &seats
+    );
+
+    getchar();
+
+    printf(
+        "Enter customer name: "
+    );
+
+    fgets(
+        customer,
+        sizeof(customer),
+        stdin
+    );
+
+    customer[
+        strcspn(
+            customer,
+            "\n"
+        )
+    ] = '\0';
+
+    sprintf(
+        buffer,
+        "3 %d %d %s",
+        movie_id,
+        seats,
+        customer
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Cancel booking */
+void cancel_booking()
+{
+    int booking_id;
+
+    printf(
+        "\nEnter Booking ID: "
+    );
+
+    scanf(
+        "%d",
+        &booking_id
+    );
+
+    sprintf(
+        buffer,
+        "4 %d",
+        booking_id
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Display booking details */
+void booking_details()
+{
+    int booking_id;
+
+    printf(
+        "\nEnter Booking ID: "
+    );
+
+    scanf(
+        "%d",
+        &booking_id
+    );
+
+    sprintf(
+        buffer,
+        "5 %d",
+        booking_id
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Send request */
+void send_request()
+{
+    send(
+        client_socket,
+        buffer,
+        strlen(buffer) + 1,
+        0
+    );
+}
+
+
+/* Receive response */
+void receive_response()
+{
+    int bytes;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    bytes = recv(
+        client_socket,
+        response,
+        sizeof(response) - 1,
+        0
+    );
+
+    if (bytes <= 0)
+    {
+        printf(
+            "Server disconnected.\n"
+        );
+
+        return;
+    }
+
+    response[bytes] = '\0';
+
+    printf(
+        "\n------------------------------------\n"
+    );
+
+    printf(
+        "%s\n",
+        response
+    );
+
+    printf(
+        "------------------------------------\n"
+    );
+}
+
+
+/* Close client */
+void close_client()
+{
+    close(client_socket);
+
+    printf(
+        "\nClient terminated.\n"
+    );
+}
