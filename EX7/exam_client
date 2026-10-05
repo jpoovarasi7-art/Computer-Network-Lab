@@ -1,0 +1,210 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 4096
+
+int client_socket;
+
+/* -------------------- Receive Message -------------------- */
+
+int receive_message()
+{
+    char buffer[BUFFER_SIZE];
+    int bytes_received;
+
+    bytes_received = recv(client_socket,
+                          buffer,
+                          sizeof(buffer) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return 0;
+
+    buffer[bytes_received] = '\0';
+
+    printf("%s", buffer);
+
+    return 1;
+}
+
+/* -------------------- Send Input -------------------- */
+
+int send_input()
+{
+    char buffer[BUFFER_SIZE];
+
+    fgets(buffer,
+          sizeof(buffer),
+          stdin);
+
+    send(client_socket,
+         buffer,
+         strlen(buffer),
+         0);
+
+    return 1;
+}
+
+/* -------------------- Login -------------------- */
+
+int login_student()
+{
+    receive_message();
+
+    send_input();
+
+    receive_message();
+
+    send_input();
+
+    return 1;
+}
+
+/* -------------------- View Questions -------------------- */
+
+void view_questions()
+{
+    receive_message();
+}
+
+/* -------------------- Submit Answer -------------------- */
+
+void submit_answer()
+{
+    receive_message();
+
+    send_input();
+
+    receive_message();
+
+    send_input();
+
+    receive_message();
+}
+
+/* -------------------- View Score -------------------- */
+
+void view_score()
+{
+    receive_message();
+}
+
+/* -------------------- Main Menu -------------------- */
+
+void run_client()
+{
+    char buffer[BUFFER_SIZE];
+    int choice;
+
+    login_student();
+
+    while (1)
+    {
+        if (!receive_message())
+            break;
+
+        fgets(buffer,
+              sizeof(buffer),
+              stdin);
+
+        choice = atoi(buffer);
+
+        send(client_socket,
+             buffer,
+             strlen(buffer),
+             0);
+
+        if (choice == 1)
+        {
+            view_questions();
+        }
+        else if (choice == 2)
+        {
+            submit_answer();
+        }
+        else if (choice == 3)
+        {
+            view_score();
+        }
+        else if (choice == 4)
+        {
+            receive_message();
+            break;
+        }
+        else
+        {
+            receive_message();
+        }
+    }
+}
+
+/* -------------------- Connect -------------------- */
+
+void connect_server(char *ip, int port)
+{
+    struct sockaddr_in server_addr;
+
+    client_socket = socket(AF_INET,
+                           SOCK_STREAM,
+                           0);
+
+    if (client_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    memset(&server_addr, 0,
+           sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET,
+                  ip,
+                  &server_addr.sin_addr) <= 0)
+    {
+        perror("Invalid IP address");
+        close(client_socket);
+        exit(1);
+    }
+
+    if (connect(client_socket,
+                (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) < 0)
+    {
+        perror("Connection failed");
+        close(client_socket);
+        exit(1);
+    }
+
+    printf("Connected to examination server.\n");
+}
+
+/* -------------------- Main -------------------- */
+
+int main(int argc, char *argv[])
+{
+    int port;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n",
+               argv[0]);
+
+        return 1;
+    }
+
+    port = atoi(argv[2]);
+
+    connect_server(argv[1], port);
+
+    run_client();
+
+    close(client_socket);
+
+    return 0;
+}
