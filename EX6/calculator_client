@@ -1,0 +1,234 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 100
+
+int client_socket;
+int port;
+int bytes;
+
+float num1;
+float num2;
+
+char operation;
+char response[BUFFER_SIZE];
+char server_ip[50];
+
+struct sockaddr_in server_addr;
+
+socklen_t server_len;
+
+void create_socket();
+void setup_server(char ip[]);
+void menu();
+void get_input();
+void send_request();
+void receive_result();
+void close_client();
+
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n",
+               argv[0]);
+
+        return 1;
+    }
+
+    strcpy(server_ip, argv[1]);
+
+    port = atoi(argv[2]);
+
+    create_socket();
+    setup_server(server_ip);
+    menu();
+    close_client();
+
+    return 0;
+}
+
+void create_socket()
+{
+    client_socket = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        0
+    );
+
+    if (client_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+void setup_server(char ip[])
+{
+    memset(
+        &server_addr,
+        0,
+        sizeof(server_addr)
+    );
+
+    server_addr.sin_family = AF_INET;
+
+    server_addr.sin_port =
+        htons(port);
+
+    if (inet_pton(
+            AF_INET,
+            ip,
+            &server_addr.sin_addr
+        ) <= 0)
+    {
+        printf("Invalid server IP address.\n");
+
+        close(client_socket);
+        exit(1);
+    }
+
+    server_len =
+        sizeof(server_addr);
+}
+
+void menu()
+{
+    int choice;
+
+    while (1)
+    {
+        printf("\n================================\n");
+        printf("       UDP CALCULATOR\n");
+        printf("================================\n");
+
+        printf("1. Addition\n");
+        printf("2. Subtraction\n");
+        printf("3. Multiplication\n");
+        printf("4. Division\n");
+        printf("5. Exit\n");
+
+        printf("\nEnter choice: ");
+        scanf("%d", &choice);
+
+        if (choice == 5)
+        {
+            operation = 'E';
+
+            send_request();
+
+            printf("\nClient terminated.\n");
+
+            break;
+        }
+
+        if (choice < 1 || choice > 4)
+        {
+            printf("Invalid choice.\n");
+            continue;
+        }
+
+        get_input();
+
+        if (choice == 1)
+        {
+            operation = '+';
+        }
+        else if (choice == 2)
+        {
+            operation = '-';
+        }
+        else if (choice == 3)
+        {
+            operation = '*';
+        }
+        else if (choice == 4)
+        {
+            operation = '/';
+        }
+
+        send_request();
+        receive_result();
+    }
+}
+
+void get_input()
+{
+    printf("\nEnter first number: ");
+    scanf("%f", &num1);
+
+    printf("Enter second number: ");
+    scanf("%f", &num2);
+}
+
+void send_request()
+{
+    sendto(
+        client_socket,
+        &operation,
+        sizeof(operation),
+        0,
+        (struct sockaddr *)&server_addr,
+        server_len
+    );
+
+    if (operation == 'E')
+    {
+        return;
+    }
+
+    sendto(
+        client_socket,
+        &num1,
+        sizeof(num1),
+        0,
+        (struct sockaddr *)&server_addr,
+        server_len
+    );
+
+    sendto(
+        client_socket,
+        &num2,
+        sizeof(num2),
+        0,
+        (struct sockaddr *)&server_addr,
+        server_len
+    );
+}
+
+void receive_result()
+{
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    bytes = recvfrom(
+        client_socket,
+        response,
+        sizeof(response) - 1,
+        0,
+        NULL,
+        NULL
+    );
+
+    if (bytes <= 0)
+    {
+        printf("No response from server.\n");
+        return;
+    }
+
+    response[bytes] = '\0';
+
+    printf("\nServer Response: %s\n",
+           response);
+}
+
+void close_client()
+{
+    close(client_socket);
+}
