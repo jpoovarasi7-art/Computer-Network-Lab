@@ -1,0 +1,481 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+
+#define BUFFER_SIZE 1024
+#define MAX_RESPONSE 4096
+#define TIMEOUT 3
+#define MAX_RETRY 3
+
+#define SEARCH 1
+#define ISSUE 2
+#define RETURN_BOOK 3
+#define AVAILABLE 4
+
+int client_socket;
+int port;
+int transaction_id = 1;
+int operation;
+int bytes;
+int retry;
+
+char server_ip[50];
+
+struct sockaddr_in server_addr;
+
+socklen_t server_len;
+
+struct Request
+{
+    int transaction_id;
+    int operation;
+    char data[100];
+};
+
+struct Response
+{
+    int transaction_id;
+    int status;
+    char data[MAX_RESPONSE];
+};
+
+struct Request request;
+struct Response response;
+
+void create_socket();
+void setup_server();
+void menu();
+void search_book();
+void issue_book();
+void return_book();
+void available_books();
+void send_request();
+void receive_response();
+void close_client();
+
+
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n",
+               argv[0]);
+
+        return 1;
+    }
+
+    strcpy(server_ip, argv[1]);
+
+    port = atoi(argv[2]);
+
+    create_socket();
+    setup_server();
+    menu();
+    close_client();
+
+    return 0;
+}
+
+
+/* Create UDP socket */
+void create_socket()
+{
+    client_socket =
+        socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (client_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server */
+void setup_server()
+{
+    memset(&server_addr, 0,
+           sizeof(server_addr));
+
+    server_addr.sin_family =
+        AF_INET;
+
+    server_addr.sin_port =
+        htons(port);
+
+    if (inet_pton(
+            AF_INET,
+            server_ip,
+            &server_addr.sin_addr
+        ) <= 0)
+    {
+        printf("Invalid server IP.\n");
+        close(client_socket);
+        exit(1);
+    }
+
+    server_len =
+        sizeof(server_addr);
+}
+
+
+/* Display menu */
+void menu()
+{
+    int choice;
+
+    while (1)
+    {
+        printf("\n================================\n");
+        printf("      LIBRARY MANAGEMENT\n");
+        printf("================================\n");
+
+        printf("1. Search Book\n");
+        printf("2. Issue Book\n");
+        printf("3. Return Book\n");
+        printf("4. View Available Books\n");
+        printf("5. Exit\n");
+
+        printf("\nEnter choice: ");
+        scanf("%d", &choice);
+
+        getchar();
+
+        if (choice == 1)
+        {
+            search_book();
+        }
+        else if (choice == 2)
+        {
+            issue_book();
+        }
+        else if (choice == 3)
+        {
+            return_book();
+        }
+        else if (choice == 4)
+        {
+            available_books();
+        }
+        else if (choice == 5)
+        {
+            printf("Client terminated.\n");
+            break;
+        }
+        else
+        {
+            printf("Invalid choice.\n");
+        }
+    }
+}
+
+
+/* Search book */
+void search_book()
+{
+    memset(&request, 0,
+           sizeof(request));
+
+    request.transaction_id =
+        transaction_id++;
+
+    request.operation = SEARCH;
+
+    printf("\nEnter book title or author: ");
+
+    fgets(
+        request.data,
+        sizeof(request.data),
+        stdin
+    );
+
+    request.data[
+        strcspn(request.data, "\n")
+    ] = '\0';
+
+    send_request();
+    receive_response();
+}
+
+
+/* Issue book */
+void issue_book()
+{
+    int book_id;
+    char user[80];
+
+    memset(&request, 0,
+           sizeof(request));
+
+    request.transaction_id =
+        transaction_id++;
+
+    request.operation = ISSUE;
+
+    printf("\nEnter Book ID: ");
+    scanf("%d", &book_id);
+
+    getchar();
+
+    printf("Enter User Name: ");
+
+    fgets(
+        user,
+        sizeof(user),
+        stdin
+    );
+
+    user[
+        strcspn(user, "\n")
+    ] = '\0';
+
+    sprintf(
+        request.data,
+        "%d %s",
+        book_id,
+        user
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* Return book */
+void return_book()
+{
+    int book_id;
+    char user[80];
+
+    memset(&request, 0,
+           sizeof(request));
+
+    request.transaction_id =
+        transaction_id++;
+
+    request.operation =
+        RETURN_BOOK;
+
+    printf("\nEnter Book ID: ");
+    scanf("%d", &book_id);
+
+    getchar();
+
+    printf("Enter User Name: ");
+
+    fgets(
+        user,
+        sizeof(user),
+        stdin
+    );
+
+    user[
+        strcspn(user, "\n")
+    ] = '\0';
+
+    sprintf(
+        request.data,
+        "%d %s",
+        book_id,
+        user
+    );
+
+    send_request();
+    receive_response();
+}
+
+
+/* View available books */
+void available_books()
+{
+    memset(&request, 0,
+           sizeof(request));
+
+    request.transaction_id =
+        transaction_id++;
+
+    request.operation =
+        AVAILABLE;
+
+    strcpy(request.data, "");
+
+    send_request();
+    receive_response();
+}
+
+
+/*
+ * Send request.
+ *
+ * Client waits for ACK from server.
+ * If ACK is not received within TIMEOUT,
+ * request is retransmitted.
+ */
+void send_request()
+{
+    int ack;
+    int received_ack;
+
+    for (retry = 0;
+         retry < MAX_RETRY;
+         retry++)
+    {
+        sendto(
+            client_socket,
+            &request,
+            sizeof(request),
+            0,
+            (struct sockaddr *)&server_addr,
+            server_len
+        );
+
+        printf("\nRequest sent. Attempt %d\n",
+               retry + 1);
+
+        fd_set readfds;
+        struct timeval timeout;
+
+        FD_ZERO(&readfds);
+
+        FD_SET(
+            client_socket,
+            &readfds
+        );
+
+        timeout.tv_sec = TIMEOUT;
+        timeout.tv_usec = 0;
+
+        if (select(
+                client_socket + 1,
+                &readfds,
+                NULL,
+                NULL,
+                &timeout
+            ) > 0)
+        {
+            received_ack = recvfrom(
+                client_socket,
+                &ack,
+                sizeof(ack),
+                0,
+                NULL,
+                NULL
+            );
+
+            if (received_ack ==
+                    sizeof(ack) &&
+                ack ==
+                    request.transaction_id)
+            {
+                printf(
+                    "Request ACK received.\n"
+                );
+
+                return;
+            }
+        }
+
+        printf(
+            "ACK timeout. Retransmitting...\n"
+        );
+    }
+
+    printf(
+        "Server did not acknowledge request.\n"
+    );
+}
+
+
+/*
+ * Receive server response.
+ *
+ * Client sends ACK after receiving response.
+ */
+void receive_response()
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    while (1)
+    {
+        FD_ZERO(&readfds);
+
+        FD_SET(
+            client_socket,
+            &readfds
+        );
+
+        timeout.tv_sec = TIMEOUT;
+        timeout.tv_usec = 0;
+
+        if (select(
+                client_socket + 1,
+                &readfds,
+                NULL,
+                NULL,
+                &timeout
+            ) <= 0)
+        {
+            printf(
+                "Response timeout.\n"
+            );
+
+            return;
+        }
+
+        bytes = recvfrom(
+            client_socket,
+            &response,
+            sizeof(response),
+            0,
+            NULL,
+            NULL
+        );
+
+        if (bytes <= 0)
+        {
+            return;
+        }
+
+        if (response.transaction_id !=
+            request.transaction_id)
+        {
+            continue;
+        }
+
+        printf("\n--------------------------------\n");
+        printf("SERVER RESPONSE\n");
+        printf("--------------------------------\n");
+
+        printf("%s\n",
+               response.data);
+
+        printf("--------------------------------\n");
+
+        /*
+         * Application-level ACK for response.
+         */
+        sendto(
+            client_socket,
+            &response.transaction_id,
+            sizeof(response.transaction_id),
+            0,
+            (struct sockaddr *)&server_addr,
+            server_len
+        );
+
+        printf("Response ACK sent.\n");
+
+        return;
+    }
+}
+
+
+/* Close socket */
+void close_client()
+{
+    close(client_socket);
+}
