@@ -1,0 +1,946 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <time.h>
+
+#define BUFFER_SIZE 1024
+#define MAX_TRAINS 20
+#define MAX_BOOKINGS 100
+
+#define TRAIN_FILE "trains.txt"
+#define BOOKING_FILE "bookings.txt"
+#define LOG_FILE "railway_log.txt"
+
+#define SEARCH 1
+#define AVAILABILITY 2
+#define BOOK 3
+#define CANCEL 4
+#define STATUS 5
+#define EXIT 6
+
+int server_socket;
+int client_socket;
+int port;
+
+int train_count;
+int booking_count;
+
+struct sockaddr_in server_addr;
+struct sockaddr_in client_addr;
+
+socklen_t client_len;
+
+struct Train
+{
+    int train_no;
+    char name[100];
+    char source[50];
+    char destination[50];
+    int seats;
+    float fare;
+};
+
+struct Booking
+{
+    int booking_id;
+    int train_no;
+    char passenger[100];
+    int seats;
+    float amount;
+    char status[20];
+};
+
+struct Train trains[MAX_TRAINS];
+struct Booking bookings[MAX_BOOKINGS];
+
+char buffer[BUFFER_SIZE];
+char response[BUFFER_SIZE];
+
+void create_socket();
+void setup_server();
+void load_trains();
+void load_bookings();
+void save_trains();
+void save_bookings();
+void write_log(char message[]);
+void run_server();
+void handle_client();
+void send_response();
+void search_trains();
+void check_availability();
+void book_ticket();
+void cancel_ticket();
+void booking_status();
+void close_server();
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    create_socket();
+    setup_server();
+    load_trains();
+    load_bookings();
+    run_server();
+    close_server();
+
+    return 0;
+}
+
+
+/* Create TCP socket */
+void create_socket()
+{
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server */
+void setup_server()
+{
+    int option = 1;
+
+    setsockopt(
+        server_socket,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &option,
+        sizeof(option)
+    );
+
+    memset(
+        &server_addr,
+        0,
+        sizeof(server_addr)
+    );
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+
+    if (bind(
+            server_socket,
+            (struct sockaddr *)&server_addr,
+            sizeof(server_addr)
+        ) < 0)
+    {
+        perror("Bind failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    if (listen(server_socket, 5) < 0)
+    {
+        perror("Listen failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    printf("\n====================================\n");
+    printf("     RAILWAY RESERVATION SERVER\n");
+    printf("====================================\n");
+    printf("Server running on port %d\n", port);
+}
+
+
+/* Load train database */
+void load_trains()
+{
+    FILE *file;
+
+    file = fopen(TRAIN_FILE, "r");
+
+    if (file == NULL)
+    {
+        printf("Train database not found.\n");
+        printf("Creating train database...\n");
+
+        train_count = 0;
+
+        file = fopen(TRAIN_FILE, "w");
+
+        if (file != NULL)
+        {
+            fclose(file);
+        }
+
+        return;
+    }
+
+    train_count = 0;
+
+    while (
+        train_count < MAX_TRAINS &&
+        fscanf(
+            file,
+            "%d|%99[^|]|%49[^|]|%49[^|]|%d|%f\n",
+            &trains[train_count].train_no,
+            trains[train_count].name,
+            trains[train_count].source,
+            trains[train_count].destination,
+            &trains[train_count].seats,
+            &trains[train_count].fare
+        ) == 6
+    )
+    {
+        train_count++;
+    }
+
+    fclose(file);
+
+    printf("%d trains loaded.\n", train_count);
+}
+
+
+/* Load booking database */
+void load_bookings()
+{
+    FILE *file;
+
+    file = fopen(BOOKING_FILE, "r");
+
+    if (file == NULL)
+    {
+        booking_count = 0;
+
+        file = fopen(BOOKING_FILE, "w");
+
+        if (file != NULL)
+        {
+            fclose(file);
+        }
+
+        return;
+    }
+
+    booking_count = 0;
+
+    while (
+        booking_count < MAX_BOOKINGS &&
+        fscanf(
+            file,
+            "%d|%d|%99[^|]|%d|%f|%19[^\n]\n",
+            &bookings[booking_count].booking_id,
+            &bookings[booking_count].train_no,
+            bookings[booking_count].passenger,
+            &bookings[booking_count].seats,
+            &bookings[booking_count].amount,
+            bookings[booking_count].status
+        ) == 6
+    )
+    {
+        booking_count++;
+    }
+
+    fclose(file);
+
+    printf("%d bookings loaded.\n", booking_count);
+}
+
+
+/* Save train database */
+void save_trains()
+{
+    FILE *file;
+
+    file = fopen(TRAIN_FILE, "w");
+
+    if (file == NULL)
+    {
+        printf("Unable to save train database.\n");
+        return;
+    }
+
+    for (int i = 0; i < train_count; i++)
+    {
+        fprintf(
+            file,
+            "%d|%s|%s|%s|%d|%.2f\n",
+            trains[i].train_no,
+            trains[i].name,
+            trains[i].source,
+            trains[i].destination,
+            trains[i].seats,
+            trains[i].fare
+        );
+    }
+
+    fclose(file);
+}
+
+
+/* Save booking database */
+void save_bookings()
+{
+    FILE *file;
+
+    file = fopen(BOOKING_FILE, "w");
+
+    if (file == NULL)
+    {
+        printf("Unable to save booking database.\n");
+        return;
+    }
+
+    for (int i = 0; i < booking_count; i++)
+    {
+        fprintf(
+            file,
+            "%d|%d|%s|%d|%.2f|%s\n",
+            bookings[i].booking_id,
+            bookings[i].train_no,
+            bookings[i].passenger,
+            bookings[i].seats,
+            bookings[i].amount,
+            bookings[i].status
+        );
+    }
+
+    fclose(file);
+}
+
+
+/* Write activity log */
+void write_log(char message[])
+{
+    FILE *file;
+
+    time_t current_time;
+    struct tm *time_info;
+
+    char time_string[100];
+
+    current_time = time(NULL);
+
+    time_info = localtime(&current_time);
+
+    strftime(
+        time_string,
+        sizeof(time_string),
+        "%Y-%m-%d %H:%M:%S",
+        time_info
+    );
+
+    file = fopen(LOG_FILE, "a");
+
+    if (file == NULL)
+    {
+        return;
+    }
+
+    fprintf(
+        file,
+        "[%s] %s\n",
+        time_string,
+        message
+    );
+
+    fclose(file);
+}
+
+
+/*
+ * Iterative server:
+ *
+ * accept one client
+ * handle all its requests
+ * close client
+ * then accept next client
+ */
+void run_server()
+{
+    while (1)
+    {
+        client_len = sizeof(client_addr);
+
+        client_socket = accept(
+            server_socket,
+            (struct sockaddr *)&client_addr,
+            &client_len
+        );
+
+        if (client_socket < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\nClient connected.\n");
+
+        handle_client();
+
+        close(client_socket);
+
+        printf("Client disconnected.\n");
+    }
+}
+
+
+/* Handle one client completely */
+void handle_client()
+{
+    int choice;
+    int bytes;
+
+    while (1)
+    {
+        memset(
+            buffer,
+            0,
+            sizeof(buffer)
+        );
+
+        bytes = recv(
+            client_socket,
+            buffer,
+            sizeof(buffer) - 1,
+            0
+        );
+
+        if (bytes <= 0)
+        {
+            break;
+        }
+
+        buffer[bytes] = '\0';
+
+        choice = atoi(buffer);
+
+        if (choice == SEARCH)
+        {
+            search_trains();
+        }
+        else if (choice == AVAILABILITY)
+        {
+            check_availability();
+        }
+        else if (choice == BOOK)
+        {
+            book_ticket();
+        }
+        else if (choice == CANCEL)
+        {
+            cancel_ticket();
+        }
+        else if (choice == STATUS)
+        {
+            booking_status();
+        }
+        else if (choice == EXIT)
+        {
+            strcpy(
+                response,
+                "Goodbye."
+            );
+
+            send_response();
+
+            break;
+        }
+        else
+        {
+            strcpy(
+                response,
+                "Invalid menu choice."
+            );
+
+            send_response();
+        }
+    }
+}
+
+
+/* Send response to client */
+void send_response()
+{
+    send(
+        client_socket,
+        response,
+        strlen(response) + 1,
+        0
+    );
+}
+
+
+/* Search trains */
+void search_trains()
+{
+    char source[50];
+    char destination[50];
+
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    sscanf(
+        buffer,
+        "%*d %49s %49s",
+        source,
+        destination
+    );
+
+    for (int i = 0; i < train_count; i++)
+    {
+        if (
+            strcmp(
+                trains[i].source,
+                source
+            ) == 0 &&
+            strcmp(
+                trains[i].destination,
+                destination
+            ) == 0
+        )
+        {
+            char temp[300];
+
+            sprintf(
+                temp,
+                "Train: %d | %s | %s -> %s | Seats: %d | Fare: %.2f\n",
+                trains[i].train_no,
+                trains[i].name,
+                trains[i].source,
+                trains[i].destination,
+                trains[i].seats,
+                trains[i].fare
+            );
+
+            strcat(
+                response,
+                temp
+            );
+
+            found = 1;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "No trains found for the given route."
+        );
+    }
+
+    char log_message[300];
+
+    sprintf(
+        log_message,
+        "SEARCH: %s to %s",
+        source,
+        destination
+    );
+
+    write_log(log_message);
+
+    send_response();
+}
+
+
+/* Check seat availability */
+void check_availability()
+{
+    int train_no;
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &train_no
+    );
+
+    for (int i = 0; i < train_count; i++)
+    {
+        if (trains[i].train_no == train_no)
+        {
+            sprintf(
+                response,
+                "Train %d - %s: %d seats available.",
+                trains[i].train_no,
+                trains[i].name,
+                trains[i].seats
+            );
+
+            found = 1;
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Invalid train number."
+        );
+    }
+
+    char log_message[200];
+
+    sprintf(
+        log_message,
+        "CHECK AVAILABILITY: Train %d",
+        train_no
+    );
+
+    write_log(log_message);
+
+    send_response();
+}
+
+
+/* Book ticket */
+void book_ticket()
+{
+    int train_no;
+    int seats;
+    char passenger[100];
+
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    /*
+     * Format:
+     * 3 train_no seats passenger_name
+     */
+    if (
+        sscanf(
+            buffer,
+            "%*d %d %d %99[^\n]",
+            &train_no,
+            &seats,
+            passenger
+        ) != 3
+    )
+    {
+        strcpy(
+            response,
+            "Invalid booking request."
+        );
+
+        send_response();
+        return;
+    }
+
+    /* Validate number of seats */
+    if (seats <= 0)
+    {
+        strcpy(
+            response,
+            "Invalid number of seats."
+        );
+
+        send_response();
+        return;
+    }
+
+    /* Find train */
+    for (int i = 0; i < train_count; i++)
+    {
+        if (trains[i].train_no == train_no)
+        {
+            found = 1;
+
+            /* Check availability */
+            if (seats > trains[i].seats)
+            {
+                strcpy(
+                    response,
+                    "Not enough seats available."
+                );
+
+                send_response();
+                return;
+            }
+
+            /* Check booking capacity */
+            if (booking_count >= MAX_BOOKINGS)
+            {
+                strcpy(
+                    response,
+                    "Booking database is full."
+                );
+
+                send_response();
+                return;
+            }
+
+            /*
+             * Reduce available seats.
+             */
+            trains[i].seats =
+                trains[i].seats - seats;
+
+            /*
+             * Create booking.
+             */
+            bookings[booking_count].booking_id =
+                booking_count + 1001;
+
+            bookings[booking_count].train_no =
+                train_no;
+
+            strcpy(
+                bookings[booking_count].passenger,
+                passenger
+            );
+
+            bookings[booking_count].seats =
+                seats;
+
+            bookings[booking_count].amount =
+                seats * trains[i].fare;
+
+            strcpy(
+                bookings[booking_count].status,
+                "CONFIRMED"
+            );
+
+            sprintf(
+                response,
+                "Booking successful!\nBooking ID: %d\nTrain: %s\nPassenger: %s\nSeats: %d\nAmount: %.2f",
+                bookings[booking_count].booking_id,
+                trains[i].name,
+                passenger,
+                seats,
+                bookings[booking_count].amount
+            );
+
+            booking_count++;
+
+            /*
+             * Update database after transaction.
+             */
+            save_trains();
+            save_bookings();
+
+            char log_message[400];
+
+            sprintf(
+                log_message,
+                "BOOK: Passenger=%s Train=%d Seats=%d",
+                passenger,
+                train_no,
+                seats
+            );
+
+            write_log(log_message);
+
+            send_response();
+
+            return;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Invalid train number."
+        );
+    }
+
+    send_response();
+}
+
+
+/* Cancel reservation */
+void cancel_ticket()
+{
+    int booking_id;
+
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &booking_id
+    );
+
+    for (int i = 0; i < booking_count; i++)
+    {
+        if (
+            bookings[i].booking_id ==
+            booking_id
+        )
+        {
+            found = 1;
+
+            if (
+                strcmp(
+                    bookings[i].status,
+                    "CANCELLED"
+                ) == 0
+            )
+            {
+                strcpy(
+                    response,
+                    "Booking is already cancelled."
+                );
+
+                send_response();
+                return;
+            }
+
+            /*
+             * Return seats to train.
+             */
+            for (int j = 0; j < train_count; j++)
+            {
+                if (
+                    trains[j].train_no ==
+                    bookings[i].train_no
+                )
+                {
+                    trains[j].seats +=
+                        bookings[i].seats;
+
+                    break;
+                }
+            }
+
+            strcpy(
+                bookings[i].status,
+                "CANCELLED"
+            );
+
+            save_trains();
+            save_bookings();
+
+            sprintf(
+                response,
+                "Booking %d cancelled successfully.",
+                booking_id
+            );
+
+            char log_message[300];
+
+            sprintf(
+                log_message,
+                "CANCEL: Booking ID=%d",
+                booking_id
+            );
+
+            write_log(log_message);
+
+            send_response();
+
+            return;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Booking ID not found."
+        );
+    }
+
+    send_response();
+}
+
+
+/* View booking status */
+void booking_status()
+{
+    int booking_id;
+
+    int found = 0;
+
+    memset(
+        response,
+        0,
+        sizeof(response)
+    );
+
+    sscanf(
+        buffer,
+        "%*d %d",
+        &booking_id
+    );
+
+    for (int i = 0; i < booking_count; i++)
+    {
+        if (
+            bookings[i].booking_id ==
+            booking_id
+        )
+        {
+            sprintf(
+                response,
+                "Booking ID: %d\nTrain No: %d\nPassenger: %s\nSeats: %d\nAmount: %.2f\nStatus: %s",
+                bookings[i].booking_id,
+                bookings[i].train_no,
+                bookings[i].passenger,
+                bookings[i].seats,
+                bookings[i].amount,
+                bookings[i].status
+            );
+
+            found = 1;
+            break;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(
+            response,
+            "Booking ID not found."
+        );
+    }
+
+    char log_message[200];
+
+    sprintf(
+        log_message,
+        "BOOKING STATUS: ID=%d",
+        booking_id
+    );
+
+    write_log(log_message);
+
+    send_response();
+}
+
+
+/* Close server */
+void close_server()
+{
+    close(server_socket);
+}
