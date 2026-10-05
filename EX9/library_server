@@ -1,0 +1,758 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <time.h>
+
+#define BUFFER_SIZE 1024
+#define MAX_BOOKS 100
+#define MAX_RESPONSE 4096
+#define TIMEOUT 3
+#define MAX_RETRY 3
+
+#define DB_FILE "library.txt"
+#define LOG_FILE "library_log.txt"
+
+int server_socket;
+int port;
+int book_count;
+
+struct sockaddr_in server_addr;
+struct sockaddr_in client_addr;
+
+socklen_t client_len;
+
+char response[MAX_RESPONSE];
+char last_response[MAX_RESPONSE];
+
+int last_transaction_id = -1;
+
+struct Book
+{
+    int id;
+    char title[100];
+    char author[100];
+    int available;
+    char issued_to[100];
+};
+
+struct Book books[MAX_BOOKS];
+
+struct Request
+{
+    int transaction_id;
+    int operation;
+    char data[100];
+};
+
+struct Response
+{
+    int transaction_id;
+    int status;
+    char data[MAX_RESPONSE];
+};
+
+/* Operation types */
+#define SEARCH 1
+#define ISSUE 2
+#define RETURN_BOOK 3
+#define AVAILABLE 4
+
+/* Status */
+#define SUCCESS 1
+#define FAILURE 0
+
+
+void create_socket();
+void setup_server();
+void load_database();
+void save_database();
+void log_activity(char message[]);
+void run_server();
+void process_request(struct Request request);
+void send_response(struct Response response);
+void search_book(char keyword[]);
+void issue_book(char data[]);
+void return_book(char data[]);
+void available_books();
+void display_books();
+void close_server();
+
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    create_socket();
+    setup_server();
+    load_database();
+    display_books();
+    run_server();
+    close_server();
+
+    return 0;
+}
+
+
+/* Create UDP socket */
+void create_socket()
+{
+    server_socket = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (server_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+}
+
+
+/* Setup server address */
+void setup_server()
+{
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+
+    if (bind(server_socket,
+             (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    printf("\n====================================\n");
+    printf("       UDP LIBRARY SERVER\n");
+    printf("====================================\n");
+
+    printf("Server running on port %d\n", port);
+}
+
+
+/* Load books from file */
+void load_database()
+{
+    FILE *file;
+
+    file = fopen(DB_FILE, "r");
+
+    if (file == NULL)
+    {
+        printf("Database file not found.\n");
+        printf("Creating new database...\n");
+
+        book_count = 0;
+
+        file = fopen(DB_FILE, "w");
+
+        if (file != NULL)
+        {
+            fclose(file);
+        }
+
+        return;
+    }
+
+    book_count = 0;
+
+    while (book_count < MAX_BOOKS &&
+           fscanf(file,
+                  "%d|%99[^|]|%99[^|]|%d|%99[^\n]\n",
+                  &books[book_count].id,
+                  books[book_count].title,
+                  books[book_count].author,
+                  &books[book_count].available,
+                  books[book_count].issued_to) == 5)
+    {
+        book_count++;
+    }
+
+    fclose(file);
+
+    printf("\n%d books loaded from database.\n",
+           book_count);
+}
+
+
+/* Save books to file */
+void save_database()
+{
+    FILE *file;
+
+    file = fopen(DB_FILE, "w");
+
+    if (file == NULL)
+    {
+        printf("Unable to save database.\n");
+        return;
+    }
+
+    for (int i = 0; i < book_count; i++)
+    {
+        fprintf(file,
+                "%d|%s|%s|%d|%s\n",
+                books[i].id,
+                books[i].title,
+                books[i].author,
+                books[i].available,
+                books[i].issued_to);
+    }
+
+    fclose(file);
+}
+
+
+/* Log activities with timestamp */
+void log_activity(char message[])
+{
+    FILE *file;
+    time_t current_time;
+    struct tm *time_info;
+    char time_string[100];
+
+    current_time = time(NULL);
+    time_info = localtime(&current_time);
+
+    strftime(time_string,
+             sizeof(time_string),
+             "%Y-%m-%d %H:%M:%S",
+             time_info);
+
+    file = fopen(LOG_FILE, "a");
+
+    if (file == NULL)
+    {
+        return;
+    }
+
+    fprintf(file,
+            "[%s] %s\n",
+            time_string,
+            message);
+
+    fclose(file);
+}
+
+
+/* Main server loop */
+void run_server()
+{
+    struct Request request;
+    int bytes;
+
+    while (1)
+    {
+        client_len = sizeof(client_addr);
+
+        memset(&request, 0, sizeof(request));
+
+        bytes = recvfrom(
+            server_socket,
+            &request,
+            sizeof(request),
+            0,
+            (struct sockaddr *)&client_addr,
+            &client_len
+        );
+
+        if (bytes <= 0)
+        {
+            continue;
+        }
+
+        printf("\nRequest received.\n");
+        printf("Transaction ID: %d\n",
+               request.transaction_id);
+
+        /*
+         * Send application-level ACK
+         * for every request.
+         */
+        sendto(
+            server_socket,
+            &request.transaction_id,
+            sizeof(request.transaction_id),
+            0,
+            (struct sockaddr *)&client_addr,
+            client_len
+        );
+
+        /*
+         * Duplicate transaction:
+         * Do not process it again.
+         */
+        if (request.transaction_id == last_transaction_id)
+        {
+            printf("Duplicate request detected.\n");
+            printf("Sending previous response again.\n");
+
+            struct Response duplicate_response;
+
+            duplicate_response.transaction_id =
+                last_transaction_id;
+
+            duplicate_response.status =
+                SUCCESS;
+
+            strcpy(
+                duplicate_response.data,
+                last_response
+            );
+
+            send_response(duplicate_response);
+
+            continue;
+        }
+
+        last_transaction_id =
+            request.transaction_id;
+
+        process_request(request);
+    }
+}
+
+
+/* Process client request */
+void process_request(struct Request request)
+{
+    struct Response response;
+
+    memset(&response, 0, sizeof(response));
+
+    response.transaction_id =
+        request.transaction_id;
+
+    response.status = FAILURE;
+
+    memset(response.data, 0,
+           sizeof(response.data));
+
+    if (request.operation == SEARCH)
+    {
+        search_book(request.data);
+    }
+    else if (request.operation == ISSUE)
+    {
+        issue_book(request.data);
+    }
+    else if (request.operation == RETURN_BOOK)
+    {
+        return_book(request.data);
+    }
+    else if (request.operation == AVAILABLE)
+    {
+        available_books();
+    }
+    else
+    {
+        strcpy(response.data,
+               "Invalid operation.");
+
+        response.status = FAILURE;
+
+        strcpy(last_response,
+               response.data);
+
+        send_response(response);
+
+        return;
+    }
+
+    /*
+     * The operation functions create the
+     * response in the global response buffer.
+     */
+    strcpy(response.data, response);
+
+    response.status = SUCCESS;
+
+    strcpy(last_response,
+           response.data);
+
+    send_response(response);
+}
+
+
+/* Search book */
+void search_book(char keyword[])
+{
+    int found = 0;
+
+    memset(response, 0, sizeof(response));
+
+    for (int i = 0; i < book_count; i++)
+    {
+        if (strstr(books[i].title, keyword) != NULL ||
+            strstr(books[i].author, keyword) != NULL)
+        {
+            char temp[300];
+
+            sprintf(
+                temp,
+                "ID: %d | Title: %s | Author: %s | %s\n",
+                books[i].id,
+                books[i].title,
+                books[i].author,
+                books[i].available ?
+                "Available" :
+                "Issued"
+            );
+
+            strcat(response, temp);
+
+            found = 1;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(response,
+               "No matching book found.");
+    }
+
+    char log_message[300];
+
+    sprintf(log_message,
+            "SEARCH request: %s",
+            keyword);
+
+    log_activity(log_message);
+}
+
+
+/* Issue book */
+void issue_book(char data[])
+{
+    int book_id;
+    char user[100];
+
+    memset(response, 0, sizeof(response));
+
+    if (sscanf(data,
+               "%d %99[^\n]",
+               &book_id,
+               user) != 2)
+    {
+        strcpy(response,
+               "Invalid issue request.");
+
+        return;
+    }
+
+    for (int i = 0; i < book_count; i++)
+    {
+        if (books[i].id == book_id)
+        {
+            if (books[i].available == 0)
+            {
+                strcpy(response,
+                       "Book is already issued.");
+
+                return;
+            }
+
+            books[i].available = 0;
+
+            strcpy(
+                books[i].issued_to,
+                user
+            );
+
+            save_database();
+
+            sprintf(
+                response,
+                "Book '%s' issued successfully to %s.",
+                books[i].title,
+                user
+            );
+
+            char log_message[300];
+
+            sprintf(
+                log_message,
+                "ISSUE: Book ID %d issued to %s",
+                book_id,
+                user
+            );
+
+            log_activity(log_message);
+
+            return;
+        }
+    }
+
+    strcpy(response,
+           "Book ID not found.");
+}
+
+
+/* Return book */
+void return_book(char data[])
+{
+    int book_id;
+    char user[100];
+
+    memset(response, 0, sizeof(response));
+
+    if (sscanf(data,
+               "%d %99[^\n]",
+               &book_id,
+               user) != 2)
+    {
+        strcpy(response,
+               "Invalid return request.");
+
+        return;
+    }
+
+    for (int i = 0; i < book_count; i++)
+    {
+        if (books[i].id == book_id)
+        {
+            if (books[i].available == 1)
+            {
+                strcpy(response,
+                       "Book is already available.");
+
+                return;
+            }
+
+            if (strcmp(books[i].issued_to, user) != 0)
+            {
+                strcpy(response,
+                       "Book was not issued to this user.");
+
+                return;
+            }
+
+            books[i].available = 1;
+
+            strcpy(
+                books[i].issued_to,
+                "NONE"
+            );
+
+            save_database();
+
+            sprintf(
+                response,
+                "Book '%s' returned successfully.",
+                books[i].title
+            );
+
+            char log_message[300];
+
+            sprintf(
+                log_message,
+                "RETURN: Book ID %d returned by %s",
+                book_id,
+                user
+            );
+
+            log_activity(log_message);
+
+            return;
+        }
+    }
+
+    strcpy(response,
+           "Book ID not found.");
+}
+
+
+/* Display available books */
+void available_books()
+{
+    int found = 0;
+
+    memset(response, 0, sizeof(response));
+
+    for (int i = 0; i < book_count; i++)
+    {
+        if (books[i].available == 1)
+        {
+            char temp[300];
+
+            sprintf(
+                temp,
+                "ID: %d | Title: %s | Author: %s\n",
+                books[i].id,
+                books[i].title,
+                books[i].author
+            );
+
+            strcat(response, temp);
+
+            found = 1;
+        }
+    }
+
+    if (found == 0)
+    {
+        strcpy(response,
+               "No books are currently available.");
+    }
+
+    log_activity(
+        "VIEW AVAILABLE BOOKS request"
+    );
+}
+
+
+/* Display books when server starts */
+void display_books()
+{
+    printf("\nLIBRARY DATABASE\n");
+    printf("--------------------------------------\n");
+
+    for (int i = 0; i < book_count; i++)
+    {
+        printf(
+            "%d | %s | %s | %s\n",
+            books[i].id,
+            books[i].title,
+            books[i].author,
+            books[i].available ?
+            "Available" :
+            "Issued"
+        );
+    }
+
+    printf("--------------------------------------\n");
+}
+
+
+/*
+ * Send response and wait for client ACK.
+ * Retransmit if ACK is not received.
+ */
+void send_response(struct Response response)
+{
+    int retry;
+    int ack;
+    int bytes;
+
+    struct sockaddr_in temp_client;
+    socklen_t temp_len;
+
+    for (retry = 0; retry < MAX_RETRY; retry++)
+    {
+        sendto(
+            server_socket,
+            &response,
+            sizeof(response),
+            0,
+            (struct sockaddr *)&client_addr,
+            client_len
+        );
+
+        printf("Response sent. Attempt %d\n",
+               retry + 1);
+
+        fd_set readfds;
+        struct timeval timeout;
+
+        FD_ZERO(&readfds);
+        FD_SET(server_socket, &readfds);
+
+        timeout.tv_sec = TIMEOUT;
+        timeout.tv_usec = 0;
+
+        if (select(server_socket + 1,
+                   &readfds,
+                   NULL,
+                   NULL,
+                   &timeout) > 0)
+        {
+            temp_len = sizeof(temp_client);
+
+            bytes = recvfrom(
+                server_socket,
+                &ack,
+                sizeof(ack),
+                0,
+                (struct sockaddr *)&temp_client,
+                &temp_len
+            );
+
+            if (bytes == sizeof(ack) &&
+                ack == response.transaction_id)
+            {
+                printf("Response ACK received.\n");
+                return;
+            }
+        }
+
+        printf("Response ACK timeout. Retransmitting...\n");
+    }
+
+    printf("Client did not acknowledge response.\n");
+}
+
+
+void close_server()
+{
+    close(server_socket);
+}
+void process_request(struct Request request)
+{
+    struct Response response_packet;
+
+    memset(&response_packet, 0, sizeof(response_packet));
+
+    response_packet.transaction_id =
+        request.transaction_id;
+
+    response_packet.status = FAILURE;
+
+    memset(response, 0, sizeof(response));
+
+    if (request.operation == SEARCH)
+    {
+        search_book(request.data);
+    }
+    else if (request.operation == ISSUE)
+    {
+        issue_book(request.data);
+    }
+    else if (request.operation == RETURN_BOOK)
+    {
+        return_book(request.data);
+    }
+    else if (request.operation == AVAILABLE)
+    {
+        available_books();
+    }
+    else
+    {
+        strcpy(response,
+               "Invalid operation.");
+    }
+
+    strcpy(
+        response_packet.data,
+        response
+    );
+
+    response_packet.status = SUCCESS;
+
+    strcpy(
+        last_response,
+        response
+    );
+
+    send_response(response_packet);
+}
