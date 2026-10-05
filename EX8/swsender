@@ -1,0 +1,368 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+
+#define MAX_FRAMES 100
+#define MAX_DATA 100
+#define TIMEOUT 3
+
+struct Frame
+{
+    int frame_no;
+    int error;
+    char data[MAX_DATA];
+};
+
+struct CircularQueue
+{
+    struct Frame frames[MAX_FRAMES];
+    int front;
+    int rear;
+    int count;
+};
+
+int sockfd;
+struct sockaddr_in receiver_addr;
+
+struct CircularQueue queue;
+
+int total_frames;
+int error_frame;
+
+int error_used = 0;
+
+/* Function declarations */
+
+void initialize_queue();
+void create_socket(char *ip, int port);
+void get_input();
+void insert_frame(struct Frame frame);
+struct Frame remove_frame();
+
+void send_frame(struct Frame frame);
+void wait_for_ack(struct Frame frame);
+
+void close_socket();
+
+
+/* Initialize circular queue */
+
+void initialize_queue()
+{
+    queue.front = 0;
+    queue.rear = 0;
+    queue.count = 0;
+}
+
+
+/* Create UDP socket */
+
+void create_socket(char *ip, int port)
+{
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    memset(&receiver_addr, 0, sizeof(receiver_addr));
+
+    receiver_addr.sin_family = AF_INET;
+    receiver_addr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET,
+                  ip,
+                  &receiver_addr.sin_addr) <= 0)
+    {
+        printf("Invalid IP address\n");
+        close(sockfd);
+        exit(1);
+    }
+}
+
+
+/* Get user input */
+
+void get_input()
+{
+    printf("Enter number of frames: ");
+    scanf("%d", &total_frames);
+
+    printf("Enter frame number with error (-1 for no error): ");
+    scanf("%d", &error_frame);
+}
+
+
+/* Insert into circular queue */
+
+void insert_frame(struct Frame frame)
+{
+    if (queue.count >= MAX_FRAMES)
+    {
+        printf("Queue full\n");
+        return;
+    }
+
+    queue.frames[queue.rear] = frame;
+
+    queue.rear =
+        (queue.rear + 1) % MAX_FRAMES;
+
+    queue.count++;
+}
+
+
+/* Remove from circular queue */
+
+struct Frame remove_frame()
+{
+    struct Frame frame;
+
+    frame = queue.frames[queue.front];
+
+    queue.front =
+        (queue.front + 1) % MAX_FRAMES;
+
+    queue.count--;
+
+    return frame;
+}
+
+
+/* Send frame */
+
+void send_frame(struct Frame frame)
+{
+    /*
+     * Send selected error frame only once
+     * with error flag = 1.
+     */
+    if (frame.frame_no == error_frame &&
+        error_used == 0)
+    {
+        frame.error = 1;
+        error_used = 1;
+
+        printf("Frame %d sent with error\n",
+               frame.frame_no);
+    }
+    else
+    {
+        frame.error = 0;
+
+        printf("Frame %d sent\n",
+               frame.frame_no);
+    }
+
+    sendto(sockfd,
+           &frame,
+           sizeof(frame),
+           0,
+           (struct sockaddr *)&receiver_addr,
+           sizeof(receiver_addr));
+}
+
+
+/* Wait for ACK */
+
+void wait_for_ack(struct Frame frame)
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    int result;
+    int ack;
+
+    while (1)
+    {
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+
+        timeout.tv_sec = TIMEOUT;
+        timeout.tv_usec = 0;
+
+        printf("Waiting for ACK %d...\n",
+               frame.frame_no + 1);
+
+        result = select(sockfd + 1,
+                        &readfds,
+                        NULL,
+                        NULL,
+                        &timeout);
+
+        /*
+         * Timeout occurred.
+         */
+        if (result == 0)
+        {
+            printf("Time-out for Frame %d\n",
+                   frame.frame_no);
+
+            printf("Retransmitting Frame %d\n",
+                   frame.frame_no);
+
+            /*
+             * Retransmission is always error-free.
+             */
+            frame.error = 0;
+
+            sendto(sockfd,
+                   &frame,
+                   sizeof(frame),
+                   0,
+                   (struct sockaddr *)&receiver_addr,
+                   sizeof(receiver_addr));
+
+            continue;
+        }
+
+        /*
+         * ACK received.
+         */
+        if (FD_ISSET(sockfd, &readfds))
+        {
+            if (recvfrom(sockfd,
+                         &ack,
+                         sizeof(ack),
+                         0,
+                         NULL,
+                         NULL) <= 0)
+            {
+                continue;
+            }
+
+            /*
+             * Negative value means NAK.
+             */
+            if (ack < 0)
+            {
+                printf("NAK %d received\n",
+                       -ack);
+
+                printf("Retransmitting Frame %d\n",
+                       frame.frame_no);
+
+                frame.error = 0;
+
+                sendto(sockfd,
+                       &frame,
+                       sizeof(frame),
+                       0,
+                       (struct sockaddr *)&receiver_addr,
+                       sizeof(receiver_addr));
+
+                continue;
+            }
+
+            /*
+             * ACK number = next frame number.
+             *
+             * Frame 0 -> ACK 1
+             * Frame 1 -> ACK 2
+             * Frame 2 -> ACK 3
+             */
+            if (ack == frame.frame_no + 1)
+            {
+                printf("ACK %d received\n",
+                       ack);
+
+                printf("Frame %d removed\n\n",
+                       frame.frame_no);
+
+                break;
+            }
+
+            /*
+             * Ignore an unexpected ACK.
+             */
+            printf("Unexpected ACK %d received\n",
+                   ack);
+        }
+    }
+}
+
+
+/* Close socket */
+
+void close_socket()
+{
+    close(sockfd);
+}
+
+
+/* Main */
+
+int main(int argc, char *argv[])
+{
+    struct Frame frame;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n",
+               argv[0]);
+        return 1;
+    }
+
+    initialize_queue();
+
+    create_socket(argv[1],
+                  atoi(argv[2]));
+
+    get_input();
+
+    if (total_frames <= 0 ||
+        total_frames > MAX_FRAMES)
+    {
+        printf("Invalid number of frames\n");
+        close_socket();
+        return 1;
+    }
+
+    if (error_frame < -1 ||
+        error_frame >= total_frames)
+    {
+        printf("Invalid error frame\n");
+        close_socket();
+        return 1;
+    }
+
+    printf("\n--- Enter Data for Each Frame ---\n");
+int i;
+    for (i = 0; i < total_frames; i++)
+    {
+        frame.frame_no = i;
+        frame.error = 0;
+
+        printf("Enter data for Frame %d: ",
+               i);
+
+        scanf(" %[^\n]", frame.data);
+
+        insert_frame(frame);
+    }
+
+    printf("\n================================\n");
+    printf("       STOP AND WAIT SENDER\n");
+    printf("================================\n\n");
+
+    while (queue.count > 0)
+    {
+        frame = remove_frame();
+
+        send_frame(frame);
+
+        wait_for_ack(frame);
+    }
+
+    printf("All frames transmitted successfully.\n");
+
+    close_socket();
+
+    return 0;
+}
