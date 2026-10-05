@@ -1,0 +1,405 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <dirent.h>
+#include <sys/stat.h>
+
+#define MAX_CLIENTS 50
+#define BUFFER_SIZE 1024
+#define FILE_NAME_SIZE 256
+#define FILE_SIZE_BUFFER 50
+
+int server_socket;
+
+/* -------------------- Send All Data -------------------- */
+
+int send_all(int socket, const void *data, int size)
+{
+    int total_sent = 0;
+    int bytes_sent;
+
+    while (total_sent < size)
+    {
+        bytes_sent = send(socket,
+                          (char *)data + total_sent,
+                          size - total_sent,
+                          0);
+
+        if (bytes_sent <= 0)
+            return 0;
+
+        total_sent += bytes_sent;
+    }
+
+    return 1;
+}
+
+/* -------------------- Receive All Data -------------------- */
+
+int receive_all(int socket, void *data, int size)
+{
+    int total_received = 0;
+    int bytes_received;
+
+    while (total_received < size)
+    {
+        bytes_received = recv(socket,
+                              (char *)data + total_received,
+                              size - total_received,
+                              0);
+
+        if (bytes_received <= 0)
+            return 0;
+
+        total_received += bytes_received;
+    }
+
+    return 1;
+}
+
+/* -------------------- Send File List -------------------- */
+
+void send_file_list(int client_socket)
+{
+    DIR *directory;
+    struct dirent *entry;
+    char buffer[BUFFER_SIZE];
+
+    directory = opendir("shared");
+
+    if (directory == NULL)
+    {
+        strcpy(buffer, "Unable to open shared directory.\n");
+        send_all(client_socket, buffer, strlen(buffer));
+        return;
+    }
+
+    memset(buffer, 0, sizeof(buffer));
+
+    strcat(buffer, "\n========== AVAILABLE FILES ==========\n");
+
+    while ((entry = readdir(directory)) != NULL)
+    {
+        if (strcmp(entry->d_name, ".") != 0 &&
+            strcmp(entry->d_name, "..") != 0)
+        {
+            strcat(buffer, entry->d_name);
+            strcat(buffer, "\n");
+        }
+    }
+
+    strcat(buffer, "=====================================\n");
+
+    send_all(client_socket,
+             buffer,
+             strlen(buffer));
+
+    closedir(directory);
+}
+
+/* -------------------- Send File -------------------- */
+
+void send_file(int client_socket, char *file_name)
+{
+    FILE *file;
+    char file_path[FILE_NAME_SIZE + 20];
+    char buffer[BUFFER_SIZE];
+    long file_size;
+    int bytes_read;
+
+    sprintf(file_path,
+            "shared/%s",
+            file_name);
+
+    file = fopen(file_path, "rb");
+
+    if (file == NULL)
+    {
+        strcpy(buffer, "ERROR");
+
+        send_all(client_socket,
+                 buffer,
+                 sizeof(buffer));
+
+        printf("File not found: %s\n", file_name);
+
+        return;
+    }
+
+    /*
+       Find file size.
+    */
+
+    fseek(file, 0, SEEK_END);
+
+    file_size = ftell(file);
+
+    fseek(file, 0, SEEK_SET);
+
+    /*
+       Send success status.
+    */
+
+    strcpy(buffer, "OK");
+
+    send_all(client_socket,
+             buffer,
+             sizeof(buffer));
+
+    /*
+       Send file size.
+    */
+
+    send_all(client_socket,
+             &file_size,
+             sizeof(file_size));
+
+    printf("Sending file: %s (%ld bytes)\n",
+           file_name,
+           file_size);
+
+    /*
+       Send file contents.
+    */
+
+    while ((bytes_read = fread(buffer,
+                               1,
+                               BUFFER_SIZE,
+                               file)) > 0)
+    {
+        if (!send_all(client_socket,
+                      buffer,
+                      bytes_read))
+        {
+            printf("Client disconnected during file transfer.\n");
+            fclose(file);
+            return;
+        }
+    }
+
+    fclose(file);
+
+    printf("File sent successfully: %s\n",
+           file_name);
+}
+
+/* -------------------- Client Handler -------------------- */
+
+void *handle_client(void *arg)
+{
+    int client_socket;
+    char buffer[BUFFER_SIZE];
+    char file_name[FILE_NAME_SIZE];
+    int bytes_received;
+    int choice;
+
+    client_socket = *(int *)arg;
+
+    while (1)
+    {
+        memset(buffer, 0, sizeof(buffer));
+
+        bytes_received = recv(client_socket,
+                              buffer,
+                              sizeof(buffer) - 1,
+                              0);
+
+        if (bytes_received <= 0)
+        {
+            printf("Client disconnected.\n");
+            break;
+        }
+
+        buffer[bytes_received] = '\0';
+
+        choice = atoi(buffer);
+
+        if (choice == 1)
+        {
+            send_file_list(client_socket);
+        }
+        else if (choice == 2)
+        {
+            send_all(client_socket,
+                     "Enter file name: ",
+                     17);
+
+            memset(file_name, 0,
+                   sizeof(file_name));
+
+            bytes_received = recv(client_socket,
+                                  file_name,
+                                  sizeof(file_name) - 1,
+                                  0);
+
+            if (bytes_received <= 0)
+            {
+                printf("Client disconnected.\n");
+                break;
+            }
+
+            file_name[bytes_received] = '\0';
+
+            file_name[strcspn(file_name,
+                              "\r\n")] = '\0';
+
+            /*
+               Prevent path traversal.
+            */
+
+            if (strstr(file_name, "..") != NULL ||
+                strchr(file_name, '/') != NULL ||
+                strchr(file_name, '\\') != NULL)
+            {
+                send_all(client_socket,
+                         "ERROR",
+                         6);
+
+                continue;
+            }
+
+            send_file(client_socket,
+                      file_name);
+        }
+        else if (choice == 3)
+        {
+            send_all(client_socket,
+                     "Goodbye!\n",
+                     9);
+
+            break;
+        }
+        else
+        {
+            send_all(client_socket,
+                     "Invalid choice.\n",
+                     17);
+        }
+    }
+
+    close(client_socket);
+
+    printf("Client connection closed.\n");
+
+    pthread_exit(NULL);
+}
+
+/* -------------------- Server -------------------- */
+
+void run_server(int port)
+{
+    struct sockaddr_in server_addr;
+    struct sockaddr_in client_addr;
+    socklen_t client_length;
+    int client_socket;
+    pthread_t thread_id;
+
+    server_socket = socket(AF_INET,
+                           SOCK_STREAM,
+                           0);
+
+    if (server_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    int option = 1;
+
+    setsockopt(server_socket,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &option,
+               sizeof(option));
+
+    memset(&server_addr, 0,
+           sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+
+    if (bind(server_socket,
+             (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    if (listen(server_socket,
+               MAX_CLIENTS) < 0)
+    {
+        perror("Listen failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    printf("=====================================\n");
+    printf("     FILE SHARING SERVER\n");
+    printf("=====================================\n");
+    printf("Server started on port %d\n",
+           port);
+    printf("Waiting for clients...\n");
+
+    while (1)
+    {
+        client_length = sizeof(client_addr);
+
+        client_socket = accept(server_socket,
+                               (struct sockaddr *)&client_addr,
+                               &client_length);
+
+        if (client_socket < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\nClient connected from %s:%d\n",
+               inet_ntoa(client_addr.sin_addr),
+               ntohs(client_addr.sin_port));
+
+        /*
+           Thread receives the client socket
+           through its argument.
+        */
+
+        if (pthread_create(&thread_id,
+                           NULL,
+                           handle_client,
+                           &client_socket) != 0)
+        {
+            perror("Thread creation failed");
+            close(client_socket);
+            continue;
+        }
+
+        pthread_detach(thread_id);
+    }
+}
+
+/* -------------------- Main -------------------- */
+
+int main(int argc, char *argv[])
+{
+    int port;
+
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n",
+               argv[0]);
+
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    run_server(port);
+
+    return 0;
+}
