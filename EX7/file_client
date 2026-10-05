@@ -1,0 +1,344 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 1024
+#define FILE_NAME_SIZE 256
+
+int client_socket;
+
+/* -------------------- Send All Data -------------------- */
+
+int send_all(const void *data, int size)
+{
+    int total_sent = 0;
+    int bytes_sent;
+
+    while (total_sent < size)
+    {
+        bytes_sent = send(client_socket,
+                          (char *)data + total_sent,
+                          size - total_sent,
+                          0);
+
+        if (bytes_sent <= 0)
+            return 0;
+
+        total_sent += bytes_sent;
+    }
+
+    return 1;
+}
+
+/* -------------------- Receive All Data -------------------- */
+
+int receive_all(void *data, int size)
+{
+    int total_received = 0;
+    int bytes_received;
+
+    while (total_received < size)
+    {
+        bytes_received = recv(client_socket,
+                              (char *)data + total_received,
+                              size - total_received,
+                              0);
+
+        if (bytes_received <= 0)
+            return 0;
+
+        total_received += bytes_received;
+    }
+
+    return 1;
+}
+
+/* -------------------- View File List -------------------- */
+
+void view_files()
+{
+    char buffer[BUFFER_SIZE];
+    int bytes_received;
+
+    bytes_received = recv(client_socket,
+                          buffer,
+                          sizeof(buffer) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return;
+
+    buffer[bytes_received] = '\0';
+
+    printf("%s", buffer);
+}
+
+/* -------------------- Download File -------------------- */
+
+void download_file()
+{
+    char file_name[FILE_NAME_SIZE];
+    char buffer[BUFFER_SIZE];
+    char status[BUFFER_SIZE];
+    char output_name[FILE_NAME_SIZE];
+    FILE *file;
+
+    long file_size;
+    long total_received;
+    int bytes_received;
+
+    /*
+       Receive prompt.
+    */
+
+    bytes_received = recv(client_socket,
+                          buffer,
+                          sizeof(buffer) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return;
+
+    buffer[bytes_received] = '\0';
+
+    printf("%s",
+           buffer);
+
+    /*
+       Enter file name.
+    */
+
+    fgets(file_name,
+          sizeof(file_name),
+          stdin);
+
+    file_name[strcspn(file_name,
+                      "\r\n")] = '\0';
+
+    send_all(file_name,
+             strlen(file_name));
+
+    /*
+       Receive status.
+    */
+
+    if (!receive_all(status,
+                     sizeof(status)))
+        return;
+
+    if (strncmp(status,
+                "ERROR",
+                5) == 0)
+    {
+        printf("File not found or unavailable.\n");
+        return;
+    }
+
+    /*
+       Receive file size.
+    */
+
+    if (!receive_all(&file_size,
+                     sizeof(file_size)))
+        return;
+
+    printf("File size: %ld bytes\n",
+           file_size);
+
+    /*
+       Create local file.
+    */
+
+    sprintf(output_name,
+            "downloaded_%s",
+            file_name);
+
+    file = fopen(output_name,
+                 "wb");
+
+    if (file == NULL)
+    {
+        perror("Unable to create output file");
+        return;
+    }
+
+    /*
+       Receive file contents.
+    */
+
+    total_received = 0;
+
+    while (total_received < file_size)
+    {
+        int bytes_to_receive;
+
+        bytes_to_receive =
+            (file_size - total_received > BUFFER_SIZE)
+            ? BUFFER_SIZE
+            : (int)(file_size - total_received);
+
+        bytes_received = recv(client_socket,
+                              buffer,
+                              bytes_to_receive,
+                              0);
+
+        if (bytes_received <= 0)
+        {
+            printf("Server disconnected during download.\n");
+            fclose(file);
+            return;
+        }
+
+        fwrite(buffer,
+               1,
+               bytes_received,
+               file);
+
+        total_received += bytes_received;
+    }
+
+    fclose(file);
+
+    printf("Download completed successfully.\n");
+    printf("Saved as: %s\n",
+           output_name);
+}
+
+/* -------------------- Menu -------------------- */
+
+void run_client()
+{
+    char buffer[BUFFER_SIZE];
+    int choice;
+    int bytes_received;
+
+    while (1)
+    {
+        printf("\n========== FILE SHARING CLIENT ==========\n");
+        printf("1. View Available Files\n");
+        printf("2. Download File\n");
+        printf("3. Exit\n");
+        printf("Enter choice: ");
+
+        fgets(buffer,
+              sizeof(buffer),
+              stdin);
+
+        choice = atoi(buffer);
+
+        sprintf(buffer,
+                "%d",
+                choice);
+
+        send_all(buffer,
+                 strlen(buffer));
+
+        if (choice == 1)
+        {
+            view_files();
+        }
+        else if (choice == 2)
+        {
+            download_file();
+        }
+        else if (choice == 3)
+        {
+            bytes_received = recv(client_socket,
+                                  buffer,
+                                  sizeof(buffer) - 1,
+                                  0);
+
+            if (bytes_received > 0)
+            {
+                buffer[bytes_received] = '\0';
+                printf("%s", buffer);
+            }
+
+            break;
+        }
+        else
+        {
+            bytes_received = recv(client_socket,
+                                  buffer,
+                                  sizeof(buffer) - 1,
+                                  0);
+
+            if (bytes_received > 0)
+            {
+                buffer[bytes_received] = '\0';
+                printf("%s", buffer);
+            }
+        }
+    }
+}
+
+/* -------------------- Connect -------------------- */
+
+void connect_server(char *ip, int port)
+{
+    struct sockaddr_in server_addr;
+
+    client_socket = socket(AF_INET,
+                           SOCK_STREAM,
+                           0);
+
+    if (client_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    memset(&server_addr,
+           0,
+           sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET,
+                  ip,
+                  &server_addr.sin_addr) <= 0)
+    {
+        perror("Invalid IP address");
+        close(client_socket);
+        exit(1);
+    }
+
+    if (connect(client_socket,
+                (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) < 0)
+    {
+        perror("Connection failed");
+        close(client_socket);
+        exit(1);
+    }
+
+    printf("Connected to file sharing server.\n");
+}
+
+/* -------------------- Main -------------------- */
+
+int main(int argc, char *argv[])
+{
+    int port;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n",
+               argv[0]);
+
+        return 1;
+    }
+
+    port = atoi(argv[2]);
+
+    connect_server(argv[1], port);
+
+    run_client();
+
+    close(client_socket);
+
+    return 0;
+}
