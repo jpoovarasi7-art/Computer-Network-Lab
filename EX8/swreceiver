@@ -1,0 +1,340 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define MAX_DATA 100
+
+/*
+ * Timeout test:
+ *
+ * ACK for Frame 2 will be dropped ONCE.
+ *
+ * Frame 2 -> ACK 3
+ *
+ * Change to -1 when you don't want
+ * to demonstrate timeout.
+ */
+#define DROP_ACK_FRAME 2
+
+struct Frame
+{
+    int frame_no;
+    int error;
+    char data[MAX_DATA];
+};
+
+struct CircularQueue
+{
+    struct Frame frame;
+    int count;
+};
+
+int sockfd;
+
+struct sockaddr_in receiver_addr;
+struct sockaddr_in sender_addr;
+
+socklen_t addr_len;
+
+struct CircularQueue queue;
+
+int expected_frame = 0;
+
+/*
+ * Used so that ACK 3 is dropped only once.
+ */
+int ack_dropped = 0;
+
+
+/* Function declarations */
+
+void initialize_queue();
+void create_socket(int port);
+
+void send_ack(int frame_no);
+void send_nak(int frame_no);
+
+void insert_queue(struct Frame frame);
+
+void process_frame(struct Frame frame);
+
+void close_socket();
+
+
+/* Initialize */
+
+void initialize_queue()
+{
+    queue.count = 0;
+    expected_frame = 0;
+}
+
+
+/* Create and bind UDP socket */
+
+void create_socket(int port)
+{
+    sockfd = socket(AF_INET,
+                    SOCK_DGRAM,
+                    0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    memset(&receiver_addr,
+           0,
+           sizeof(receiver_addr));
+
+    receiver_addr.sin_family =
+        AF_INET;
+
+    receiver_addr.sin_addr.s_addr =
+        INADDR_ANY;
+
+    receiver_addr.sin_port =
+        htons(port);
+
+    if (bind(sockfd,
+             (struct sockaddr *)&receiver_addr,
+             sizeof(receiver_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(sockfd);
+        exit(1);
+    }
+
+    addr_len =
+        sizeof(sender_addr);
+}
+
+
+/* Send ACK */
+
+void send_ack(int frame_no)
+{
+    int ack;
+
+    /*
+     * ACK = next expected frame.
+     *
+     * Frame 0 -> ACK 1
+     * Frame 1 -> ACK 2
+     * Frame 2 -> ACK 3
+     */
+    ack = frame_no + 1;
+
+    /*
+     * Simulate ACK loss once.
+     */
+    if (frame_no == DROP_ACK_FRAME &&
+        ack_dropped == 0)
+    {
+        printf("ACK %d lost (simulated)\n",
+               ack);
+
+        ack_dropped = 1;
+
+        return;
+    }
+
+    sendto(sockfd,
+           &ack,
+           sizeof(ack),
+           0,
+           (struct sockaddr *)&sender_addr,
+           addr_len);
+
+    printf("ACK %d sent\n",
+           ack);
+}
+
+
+/* Send NAK */
+
+void send_nak(int frame_no)
+{
+    int nak;
+
+    /*
+     * NAK is negative.
+     *
+     * NAK 0 needs special handling because
+     * -0 is still 0.
+     */
+    if (frame_no == 0)
+        nak = -1000;
+    else
+        nak = -frame_no;
+
+    sendto(sockfd,
+           &nak,
+           sizeof(nak),
+           0,
+           (struct sockaddr *)&sender_addr,
+           addr_len);
+
+    printf("NAK %d sent\n",
+           frame_no);
+}
+
+
+/* Circular queue */
+
+void insert_queue(struct Frame frame)
+{
+    if (queue.count == 0)
+    {
+        queue.frame = frame;
+        queue.count = 1;
+    }
+}
+
+
+/* Process received frame */
+
+void process_frame(struct Frame frame)
+{
+    printf("\nFrame %d received\n",
+           frame.frame_no);
+
+    /*
+     * Error detected.
+     */
+    if (frame.error == 1)
+    {
+        printf("Frame %d has error\n",
+               frame.frame_no);
+
+        send_nak(frame.frame_no);
+
+        return;
+    }
+
+    /*
+     * Correct frame.
+     */
+    if (frame.frame_no == expected_frame)
+    {
+        printf("Frame %d received in order\n",
+               frame.frame_no);
+
+        send_ack(frame.frame_no);
+
+        /*
+         * Deliver only once.
+         */
+        printf("Frame %d delivered to Network Layer "
+               "(Data: %s)\n",
+               frame.frame_no,
+               frame.data);
+
+        expected_frame++;
+
+        return;
+    }
+
+    /*
+     * Duplicate frame.
+     *
+     * This normally happens after timeout:
+     *
+     * Frame 2 received
+     * ACK 3 lost
+     * Sender retransmits Frame 2
+     */
+    if (frame.frame_no < expected_frame)
+    {
+        printf("Duplicate Frame %d received\n",
+               frame.frame_no);
+
+        /*
+         * Send ACK again.
+         */
+        send_ack(frame.frame_no);
+
+        return;
+    }
+
+    /*
+     * Frame ahead of expected.
+     *
+     * This case is not normally expected in
+     * Stop-and-Wait because sender sends only
+     * one frame at a time.
+     */
+    if (frame.frame_no > expected_frame)
+    {
+        printf("Unexpected Frame %d received\n",
+               frame.frame_no);
+
+        printf("Expected Frame %d\n",
+               expected_frame);
+
+        send_nak(expected_frame);
+
+        return;
+    }
+}
+
+
+/* Close */
+
+void close_socket()
+{
+    close(sockfd);
+}
+
+
+/* Main */
+
+int main(int argc, char *argv[])
+{
+    struct Frame frame;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP> <port>\n",
+               argv[0]);
+        return 1;
+    }
+
+    initialize_queue();
+
+    create_socket(atoi(argv[2]));
+
+    printf("\n================================\n");
+    printf("      STOP AND WAIT RECEIVER\n");
+    printf("================================\n");
+
+    printf("Waiting for frames...\n");
+
+    /*
+     * Receiver remains running.
+     *
+     * Press Ctrl+C manually to stop.
+     */
+    while (1)
+    {
+        if (recvfrom(sockfd,
+                     &frame,
+                     sizeof(frame),
+                     0,
+                     (struct sockaddr *)&sender_addr,
+                     &addr_len) <= 0)
+        {
+            continue;
+        }
+
+        process_frame(frame);
+    }
+
+    close_socket();
+
+    return 0;
+}
