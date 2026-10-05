@@ -1,0 +1,87 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+int find_local_cache(char mac[], char ip[])
+{
+    FILE *fp;
+    char command[100];
+    char line[300];
+    sprintf(command, "ip neigh | grep -i '%s'", mac);
+    fp = popen(command, "r");
+    if (fp == NULL)
+        return 0;
+    if (fgets(line, sizeof(line), fp) != NULL)
+    {
+        sscanf(line, "%s", ip);
+        pclose(fp);
+        return 1;
+    }
+    pclose(fp);
+    return 0;
+}
+int main(int argc, char *argv[])
+{
+    int sock;
+    int port;
+    char server_ip[20];
+    char mac[20];
+    char ip[30];
+    struct sockaddr_in server;
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+    strcpy(server_ip, argv[1]);
+    port = atoi(argv[2]);
+    printf("Enter MAC Address: ");
+    scanf("%19s", mac);
+    printf("\nSearching local ARP cache...\n");
+    if (find_local_cache(mac, ip))
+    {
+        printf("MAC found in local cache.\n");
+        printf("IP Address: %s\n", ip);
+        return 0;
+    }
+    printf("MAC not found in local cache.\n");
+    printf("Contacting RARP server...\n");
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(port);
+    if (inet_pton(AF_INET, server_ip,&server.sin_addr) <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(sock);
+        return 1;
+    }
+    if (connect(sock, (struct sockaddr *)&server,
+                sizeof(server)) < 0)
+    {
+        perror("Connection failed");
+        close(sock);
+        return 1;
+    }
+    send(sock, mac, strlen(mac) + 1, 0);
+    memset(ip, 0, sizeof(ip));
+    recv(sock, ip, sizeof(ip) - 1, 0);
+    if (strcmp(ip, "NOT_FOUND") == 0)
+    {
+        printf("MAC not found in server table.\n");
+    }
+    else
+    {
+        printf("MAC found in server table.\n");
+        printf("IP Address: %s\n", ip);
+    }
+    close(sock);
+    return 0;
+}
