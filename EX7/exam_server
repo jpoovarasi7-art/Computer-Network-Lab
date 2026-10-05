@@ -1,0 +1,663 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <time.h>
+#include <signal.h>
+
+#define MAX_CLIENTS 50
+#define MAX_QUESTIONS 5
+#define BUFFER_SIZE 1024
+#define USERNAME_SIZE 50
+#define PASSWORD_SIZE 50
+
+#define PORT 8080
+
+/* -------------------- Structures -------------------- */
+
+struct User
+{
+    char username[USERNAME_SIZE];
+    char password[PASSWORD_SIZE];
+};
+
+struct Question
+{
+    int id;
+    char question[300];
+    char optionA[100];
+    char optionB[100];
+    char optionC[100];
+    char optionD[100];
+    char answer;
+};
+
+struct ClientSession
+{
+    int socket;
+    int authenticated;
+    int score;
+    int answered[MAX_QUESTIONS];
+    char username[USERNAME_SIZE];
+};
+
+/* -------------------- Global Variables -------------------- */
+
+int server_socket;
+
+pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* User database */
+
+struct User users[MAX_CLIENTS] =
+{
+    {"student1", "pass123"},
+    {"student2", "pass456"},
+    {"student3", "pass789"},
+    {"student4", "exam123"},
+    {"student5", "test123"}
+};
+
+int user_count = 5;
+
+/* Question database */
+
+struct Question questions[MAX_QUESTIONS] =
+{
+    {
+        1,
+        "Which language is used for system programming?",
+        "Java",
+        "C",
+        "HTML",
+        "CSS",
+        'B'
+    },
+
+    {
+        2,
+        "Which protocol is connection-oriented?",
+        "UDP",
+        "IP",
+        "TCP",
+        "ICMP",
+        'C'
+    },
+
+    {
+        3,
+        "Which data structure follows FIFO?",
+        "Stack",
+        "Queue",
+        "Tree",
+        "Graph",
+        'B'
+    },
+
+    {
+        4,
+        "Which SQL command is used to retrieve data?",
+        "INSERT",
+        "UPDATE",
+        "SELECT",
+        "DELETE",
+        'C'
+    },
+
+    {
+        5,
+        "Which operating system is open source?",
+        "Linux",
+        "Windows",
+        "DOS",
+        "iOS",
+        'A'
+    }
+};
+
+/* -------------------- Logging -------------------- */
+
+void log_activity(const char *username, const char *activity)
+{
+    FILE *file;
+    time_t current_time;
+    struct tm *time_info;
+    char timestamp[100];
+
+    current_time = time(NULL);
+    time_info = localtime(&current_time);
+
+    strftime(timestamp, sizeof(timestamp),
+             "%Y-%m-%d %H:%M:%S", time_info);
+
+    pthread_mutex_lock(&log_mutex);
+
+    file = fopen("exam_log.txt", "a");
+
+    if (file != NULL)
+    {
+        fprintf(file,
+                "[%s] User: %s | %s\n",
+                timestamp,
+                username,
+                activity);
+
+        fclose(file);
+    }
+
+    pthread_mutex_unlock(&log_mutex);
+}
+
+/* -------------------- Send Message -------------------- */
+
+void send_message(int client_socket, const char *message)
+{
+    send(client_socket, message, strlen(message), 0);
+}
+
+/* -------------------- Authentication -------------------- */
+
+int authenticate(char *username, char *password)
+{
+    int i;
+
+    for (i = 0; i < user_count; i++)
+    {
+        if (strcmp(users[i].username, username) == 0 &&
+            strcmp(users[i].password, password) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* -------------------- Login -------------------- */
+
+int login_student(struct ClientSession *session)
+{
+    char buffer[BUFFER_SIZE];
+    char username[USERNAME_SIZE];
+    char password[PASSWORD_SIZE];
+    int bytes_received;
+
+    send_message(session->socket,
+                  "\n===== ONLINE EXAMINATION SYSTEM =====\n"
+                  "Username: ");
+
+    bytes_received = recv(session->socket,
+                          username,
+                          sizeof(username) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return 0;
+
+    username[bytes_received] = '\0';
+
+    username[strcspn(username, "\r\n")] = '\0';
+
+    send_message(session->socket, "Password: ");
+
+    bytes_received = recv(session->socket,
+                          password,
+                          sizeof(password) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return 0;
+
+    password[bytes_received] = '\0';
+
+    password[strcspn(password, "\r\n")] = '\0';
+
+    if (authenticate(username, password))
+    {
+        strcpy(session->username, username);
+        session->authenticated = 1;
+
+        log_activity(username, "Successful login");
+
+        sprintf(buffer,
+                "\nLogin successful, %s!\n",
+                username);
+
+        send_message(session->socket, buffer);
+
+        return 1;
+    }
+
+    log_activity(username, "Failed login attempt");
+
+    send_message(session->socket,
+                 "\nInvalid username or password.\n");
+
+    return 0;
+}
+
+/* -------------------- Display Questions -------------------- */
+
+void send_questions(struct ClientSession *session)
+{
+    char buffer[BUFFER_SIZE];
+    int i;
+
+    /*
+       The question database is shared by all threads.
+       Mutex prevents simultaneous modification/access
+       if the database is later updated.
+    */
+
+    pthread_mutex_lock(&data_mutex);
+
+    send_message(session->socket,
+                 "\n========== EXAM QUESTIONS ==========\n");
+
+    for (i = 0; i < MAX_QUESTIONS; i++)
+    {
+        sprintf(buffer,
+                "\nQuestion %d: %s\n"
+                "A. %s\n"
+                "B. %s\n"
+                "C. %s\n"
+                "D. %s\n",
+                questions[i].id,
+                questions[i].question,
+                questions[i].optionA,
+                questions[i].optionB,
+                questions[i].optionC,
+                questions[i].optionD);
+
+        send_message(session->socket, buffer);
+    }
+
+    pthread_mutex_unlock(&data_mutex);
+
+    log_activity(session->username,
+                 "Retrieved examination questions");
+}
+
+/* -------------------- Submit Answer -------------------- */
+
+void submit_answer(struct ClientSession *session)
+{
+    char buffer[BUFFER_SIZE];
+    char answer;
+    int question_number;
+    int bytes_received;
+
+    send_message(session->socket,
+                 "\nEnter question number (1-5): ");
+
+    bytes_received = recv(session->socket,
+                          buffer,
+                          sizeof(buffer) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return;
+
+    buffer[bytes_received] = '\0';
+
+    question_number = atoi(buffer);
+
+    if (question_number < 1 ||
+        question_number > MAX_QUESTIONS)
+    {
+        send_message(session->socket,
+                     "Invalid question number.\n");
+
+        log_activity(session->username,
+                     "Submitted invalid question number");
+
+        return;
+    }
+
+    if (session->answered[question_number - 1] == 1)
+    {
+        send_message(session->socket,
+                     "You have already answered this question.\n");
+
+        return;
+    }
+
+    send_message(session->socket,
+                 "Enter answer (A/B/C/D): ");
+
+    bytes_received = recv(session->socket,
+                          buffer,
+                          sizeof(buffer) - 1,
+                          0);
+
+    if (bytes_received <= 0)
+        return;
+
+    buffer[bytes_received] = '\0';
+
+    answer = buffer[0];
+
+    if (answer >= 'a' && answer <= 'd')
+        answer = answer - 'a' + 'A';
+
+    if (answer != 'A' &&
+        answer != 'B' &&
+        answer != 'C' &&
+        answer != 'D')
+    {
+        send_message(session->socket,
+                     "Invalid answer. Enter A, B, C or D.\n");
+
+        return;
+    }
+
+    /*
+       Lock shared question database while
+       checking the correct answer.
+    */
+
+    pthread_mutex_lock(&data_mutex);
+
+    if (answer == questions[question_number - 1].answer)
+    {
+        session->score++;
+
+        send_message(session->socket,
+                     "Correct answer!\n");
+    }
+    else
+    {
+        send_message(session->socket,
+                     "Wrong answer.\n");
+    }
+
+    session->answered[question_number - 1] = 1;
+
+    pthread_mutex_unlock(&data_mutex);
+
+    sprintf(buffer,
+            "Current score: %d/%d\n",
+            session->score,
+            MAX_QUESTIONS);
+
+    send_message(session->socket, buffer);
+
+    log_activity(session->username,
+                 "Submitted an examination answer");
+}
+
+/* -------------------- View Score -------------------- */
+
+void view_score(struct ClientSession *session)
+{
+    char buffer[BUFFER_SIZE];
+
+    sprintf(buffer,
+            "\n========== FINAL SCORE ==========\n"
+            "Student : %s\n"
+            "Score   : %d / %d\n",
+            session->username,
+            session->score,
+            MAX_QUESTIONS);
+
+    send_message(session->socket, buffer);
+
+    log_activity(session->username,
+                 "Viewed final score");
+}
+
+/* -------------------- Menu -------------------- */
+
+void send_menu(struct ClientSession *session)
+{
+    send_message(session->socket,
+                 "\n========== MENU ==========\n"
+                 "1. View Questions\n"
+                 "2. Submit Answer\n"
+                 "3. View Final Score\n"
+                 "4. Logout\n"
+                 "Enter choice: ");
+}
+
+/* -------------------- Client Handler -------------------- */
+
+void *handle_client(void *arg)
+{
+    struct ClientSession *session;
+    char buffer[BUFFER_SIZE];
+    int bytes_received;
+    int choice;
+
+    session = (struct ClientSession *)arg;
+
+    /*
+       Initialize session-specific data.
+    */
+
+    session->authenticated = 0;
+    session->score = 0;
+
+    memset(session->answered, 0,
+           sizeof(session->answered));
+
+    /*
+       Authentication
+    */
+
+    if (!login_student(session))
+    {
+        close(session->socket);
+        free(session);
+        pthread_exit(NULL);
+    }
+
+    /*
+       Process authenticated client.
+    */
+
+    while (1)
+    {
+        send_menu(session);
+
+        bytes_received = recv(session->socket,
+                              buffer,
+                              sizeof(buffer) - 1,
+                              0);
+
+        if (bytes_received <= 0)
+        {
+            printf("Client %s disconnected.\n",
+                   session->username);
+
+            log_activity(session->username,
+                         "Client disconnected");
+
+            break;
+        }
+
+        buffer[bytes_received] = '\0';
+
+        choice = atoi(buffer);
+
+        switch (choice)
+        {
+            case 1:
+                send_questions(session);
+                break;
+
+            case 2:
+                submit_answer(session);
+                break;
+
+            case 3:
+                view_score(session);
+                break;
+
+            case 4:
+                send_message(session->socket,
+                             "\nLogout successful. Goodbye!\n");
+
+                log_activity(session->username,
+                             "Logged out");
+
+                close(session->socket);
+                free(session);
+
+                pthread_exit(NULL);
+
+            default:
+                send_message(session->socket,
+                             "Invalid menu choice.\n");
+
+                log_activity(session->username,
+                             "Invalid menu request");
+        }
+    }
+
+    close(session->socket);
+    free(session);
+
+    pthread_exit(NULL);
+}
+
+/* -------------------- Server -------------------- */
+
+void run_server(int port)
+{
+    struct sockaddr_in server_addr;
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+    int client_socket;
+    pthread_t thread_id;
+
+    server_socket = socket(AF_INET,
+                           SOCK_STREAM,
+                           0);
+
+    if (server_socket < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    /*
+       Allows quick reuse of the server port.
+    */
+
+    int option = 1;
+
+    setsockopt(server_socket,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &option,
+               sizeof(option));
+
+    memset(&server_addr, 0,
+           sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+
+    if (bind(server_socket,
+             (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    if (listen(server_socket, MAX_CLIENTS) < 0)
+    {
+        perror("Listen failed");
+        close(server_socket);
+        exit(1);
+    }
+
+    printf("========================================\n");
+    printf(" Online Examination Server Started\n");
+    printf(" Port: %d\n", port);
+    printf(" Waiting for students...\n");
+    printf("========================================\n");
+
+    while (1)
+    {
+        client_len = sizeof(client_addr);
+
+        client_socket = accept(server_socket,
+                               (struct sockaddr *)&client_addr,
+                               &client_len);
+
+        if (client_socket < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\nStudent connected from %s:%d\n",
+               inet_ntoa(client_addr.sin_addr),
+               ntohs(client_addr.sin_port));
+
+        /*
+           Allocate a separate session for this client.
+        */
+
+        struct ClientSession *session;
+
+        session = malloc(sizeof(struct ClientSession));
+
+        if (session == NULL)
+        {
+            perror("Memory allocation failed");
+            close(client_socket);
+            continue;
+        }
+
+        session->socket = client_socket;
+
+        /*
+           Create a separate thread for each client.
+        */
+
+        if (pthread_create(&thread_id,
+                           NULL,
+                           handle_client,
+                           session) != 0)
+        {
+            perror("Thread creation failed");
+
+            close(client_socket);
+            free(session);
+            continue;
+        }
+
+        /*
+           Thread handles the client independently.
+        */
+
+        pthread_detach(thread_id);
+    }
+}
+
+/* -------------------- Main -------------------- */
+
+int main(int argc, char *argv[])
+{
+    int port;
+
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    run_server(port);
+
+    return 0;
+}
